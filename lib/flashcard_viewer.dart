@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'flashcard.dart';
 
 class FlashcardViewer extends StatefulWidget {
   final List<Flashcard> flashcards;
+  final String? outlineText;
 
-  const FlashcardViewer({super.key, required this.flashcards});
+  const FlashcardViewer({
+    super.key,
+    required this.flashcards,
+    this.outlineText,
+  });
 
   @override
   State<FlashcardViewer> createState() => _FlashcardViewerState();
@@ -15,6 +21,7 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
   bool _showAnswer = false;
 
   void _nextCard() {
+    if (widget.flashcards.isEmpty) return;
     setState(() {
       _currentIndex = (_currentIndex + 1) % widget.flashcards.length;
       _showAnswer = false;
@@ -26,62 +33,100 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
     _nextCard();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final flashcard = widget.flashcards[_currentIndex];
+  void _viewOutline() {
+    if (widget.outlineText == null || widget.outlineText!.isEmpty) return;
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _showAnswer = !_showAnswer;
-            });
-          },
-          child: Card(
-            color: Colors.white,
-            elevation: 8,
-            margin: const EdgeInsets.symmetric(horizontal: 20),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              height: 250,
-              alignment: Alignment.center,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                child: Text(
-                  _showAnswer ? flashcard.answer : flashcard.question,
-                  key: ValueKey(_showAnswer),
-                  style: const TextStyle(fontSize: 20, color: Colors.black87),
-                  textAlign: TextAlign.center,
-                ),
-              ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Outline')),
+          body: Markdown(
+            data: widget.outlineText!,
+            padding: const EdgeInsets.all(16),
+            styleSheet: MarkdownStyleSheet(
+              h1: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              h2: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              p: const TextStyle(fontSize: 16),
             ),
           ),
         ),
-        const SizedBox(height: 32),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.flashcards.isEmpty) {
+      return const Center(child: Text('No flashcards to display.'));
+    }
+
+    final flashcard = widget.flashcards[_currentIndex];
+
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 40.0), // prevent clipping on small screens
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => _handleFeedback('Again'),
-              child: const Text('Again'),
+            const SizedBox(height: 40),
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _showAnswer = !_showAnswer;
+                });
+              },
+              child: Card(
+                color: Colors.white,
+                elevation: 8,
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  height: 250,
+                  alignment: Alignment.center,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    child: Text(
+                      _showAnswer ? flashcard.answer : flashcard.question,
+                      key: ValueKey(_showAnswer),
+                      style: const TextStyle(fontSize: 20, color: Colors.black87),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
             ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-              onPressed: () => _handleFeedback('Good'),
-              child: const Text('Good'),
+            const SizedBox(height: 32),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () => _handleFeedback('Again'),
+                  child: const Text('Again'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                  onPressed: () => _handleFeedback('Good'),
+                  child: const Text('Good'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  onPressed: () => _handleFeedback('Easy'),
+                  child: const Text('Easy'),
+                ),
+              ],
             ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              onPressed: () => _handleFeedback('Easy'),
-              child: const Text('Easy'),
-            ),
+            const SizedBox(height: 32),
+            if (widget.outlineText != null && widget.outlineText!.isNotEmpty)
+              ElevatedButton(
+                onPressed: _viewOutline,
+                child: const Text('View Outline'),
+              ),
           ],
         ),
-      ],
+      ),
     );
   }
 }

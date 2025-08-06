@@ -86,6 +86,8 @@ class _UploadPageState extends State<UploadPage> {
 
         if (response.statusCode == 200) {
           final json = jsonDecode(response.body);
+
+          // ✅ Parse flashcards
           final rawCards = List<Map<String, dynamic>>.from(json['flashcards']);
           final flashcardObjects = rawCards.map((card) {
             return Flashcard(
@@ -94,13 +96,19 @@ class _UploadPageState extends State<UploadPage> {
             );
           }).toList();
 
+          // ✅ Parse outline
+          final outline = json['outline'] as String? ?? '';
+
           if (!mounted) return;
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (_) => Scaffold(
                 appBar: AppBar(title: const Text('Study Flashcards')),
-                body: FlashcardViewer(flashcards: flashcardObjects),
+                body: FlashcardViewer(
+                  flashcards: flashcardObjects,
+                  outlineText: outline, // 🔥 we'll use this in step 3
+                ),
               ),
             ),
           );
