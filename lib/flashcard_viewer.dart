@@ -21,11 +21,9 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
     });
   }
 
-  void _previousCard() {
-    setState(() {
-      _currentIndex = (_currentIndex - 1 + widget.flashcards.length) % widget.flashcards.length;
-      _showAnswer = false;
-    });
+  void _handleFeedback(String rating) {
+    print('User chose: $rating'); // Future: hook into SRS logic here
+    _nextCard();
   }
 
   @override
@@ -42,9 +40,10 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
             });
           },
           child: Card(
-            elevation: 6,
+            color: Colors.white,
+            elevation: 8,
             margin: const EdgeInsets.symmetric(horizontal: 20),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             child: Container(
               padding: const EdgeInsets.all(24),
               height: 250,
@@ -54,19 +53,32 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
                 child: Text(
                   _showAnswer ? flashcard.answer : flashcard.question,
                   key: ValueKey(_showAnswer),
-                  style: const TextStyle(fontSize: 20),
+                  style: const TextStyle(fontSize: 20, color: Colors.black87),
                   textAlign: TextAlign.center,
                 ),
               ),
             ),
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 32),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            ElevatedButton(onPressed: _previousCard, child: const Text('Previous')),
-            ElevatedButton(onPressed: _nextCard, child: const Text('Next')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => _handleFeedback('Again'),
+              child: const Text('Again'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+              onPressed: () => _handleFeedback('Good'),
+              child: const Text('Good'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => _handleFeedback('Easy'),
+              child: const Text('Easy'),
+            ),
           ],
         ),
       ],
