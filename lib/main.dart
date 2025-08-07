@@ -3,13 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+
 import 'flashcard.dart';
 import 'flashcard_viewer.dart';
 
-// 🔁 Toggle this to preview the test flashcard viewer
 const bool useTestViewer = false;
 
-// 🧪 Dummy test flashcards
 final dummyCards = [
   Flashcard(
     question: 'What is Flutter?',
@@ -25,7 +26,10 @@ final dummyCards = [
   ),
 ];
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await Hive.openBox('study_data');
   runApp(const NeuroForgeApp());
 }
 
@@ -56,8 +60,16 @@ class UploadPage extends StatefulWidget {
 
 class _UploadPageState extends State<UploadPage> {
   bool _isLoading = false;
+  String? savedOutline;
 
   final String apiUrl = 'http://10.0.2.2:8000/preview-study-pack';
+
+  @override
+  void initState() {
+    super.initState();
+    final box = Hive.box('study_data');
+    savedOutline = box.get('last_outline');
+  }
 
   Future<void> _pickAndUploadFile() async {
     setState(() {
@@ -87,7 +99,6 @@ class _UploadPageState extends State<UploadPage> {
         if (response.statusCode == 200) {
           final json = jsonDecode(response.body);
 
-          // ✅ Parse flashcards
           final rawCards = List<Map<String, dynamic>>.from(json['flashcards']);
           final flashcardObjects = rawCards.map((card) {
             return Flashcard(
@@ -96,8 +107,10 @@ class _UploadPageState extends State<UploadPage> {
             );
           }).toList();
 
-          // ✅ Parse outline
           final outline = json['outline'] as String? ?? '';
+
+          final box = Hive.box('study_data');
+          await box.put('last_outline', outline);
 
           if (!mounted) return;
           Navigator.push(
@@ -107,7 +120,7 @@ class _UploadPageState extends State<UploadPage> {
                 appBar: AppBar(title: const Text('Study Flashcards')),
                 body: FlashcardViewer(
                   flashcards: flashcardObjects,
-                  outlineText: outline, // 🔥 we'll use this in step 3
+                  outlineText: outline,
                 ),
               ),
             ),
@@ -125,6 +138,29 @@ class _UploadPageState extends State<UploadPage> {
     });
   }
 
+  void _viewSavedOutline() {
+    final outline = savedOutline ?? '';
+    if (outline.isEmpty) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Saved Outline')),
+          body: Markdown(
+            data: outline,
+            padding: const EdgeInsets.all(16),
+            styleSheet: MarkdownStyleSheet(
+              h1: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              h2: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              p: const TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showError(String message) {
     showDialog(
       context: context,
@@ -134,6 +170,8 @@ class _UploadPageState extends State<UploadPage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasSavedOutline = savedOutline != null && savedOutline!.trim().isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Upload to NeuroForge')),
       body: Padding(
@@ -146,6 +184,12 @@ class _UploadPageState extends State<UploadPage> {
             ),
             const SizedBox(height: 20),
             if (_isLoading) const LinearProgressIndicator(),
+            const Spacer(),
+            if (hasSavedOutline)
+              ElevatedButton(
+                onPressed: _viewSavedOutline,
+                child: const Text('📚 Review Previous Outline'),
+              ),
           ],
         ),
       ),
