@@ -60,16 +60,7 @@ class UploadPage extends StatefulWidget {
 
 class _UploadPageState extends State<UploadPage> {
   bool _isLoading = false;
-  String? savedOutline;
-
   final String apiUrl = 'http://10.0.2.2:8000/preview-study-pack';
-
-  @override
-  void initState() {
-    super.initState();
-    final box = Hive.box('study_data');
-    savedOutline = box.get('last_outline');
-  }
 
   Future<void> _pickAndUploadFile() async {
     setState(() {
@@ -110,14 +101,17 @@ class _UploadPageState extends State<UploadPage> {
           final outline = json['outline'] as String? ?? '';
 
           final box = Hive.box('study_data');
-          await box.put('last_outline', outline);
+          await box.put(fileName, {
+            'flashcards': rawCards,
+            'outline': outline,
+          });
 
           if (!mounted) return;
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (_) => Scaffold(
-                appBar: AppBar(title: const Text('Study Flashcards')),
+                appBar: AppBar(title: Text(fileName)),
                 body: FlashcardViewer(
                   flashcards: flashcardObjects,
                   outlineText: outline,
@@ -138,23 +132,42 @@ class _UploadPageState extends State<UploadPage> {
     });
   }
 
-  void _viewSavedOutline() {
-    final outline = savedOutline ?? '';
-    if (outline.isEmpty) return;
+  void _viewSavedUploads() {
+    final box = Hive.box('study_data');
+    final keys = box.keys.toList();
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('Saved Outline')),
-          body: Markdown(
-            data: outline,
-            padding: const EdgeInsets.all(16),
-            styleSheet: MarkdownStyleSheet(
-              h1: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              h2: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              p: const TextStyle(fontSize: 16),
-            ),
+          appBar: AppBar(title: const Text('Saved Uploads')),
+          body: ListView.builder(
+            itemCount: keys.length,
+            itemBuilder: (context, index) {
+              final fileName = keys[index];
+              return ListTile(
+                title: Text(fileName),
+                onTap: () {
+                  final data = box.get(fileName);
+                  final flashcardObjects = (data['flashcards'] as List)
+                      .map((c) => Flashcard(question: c['front'], answer: c['back']))
+                      .toList();
+                  final outline = data['outline'] ?? '';
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => Scaffold(
+                        appBar: AppBar(title: Text(fileName)),
+                        body: FlashcardViewer(
+                          flashcards: flashcardObjects,
+                          outlineText: outline,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
           ),
         ),
       ),
@@ -170,8 +183,6 @@ class _UploadPageState extends State<UploadPage> {
 
   @override
   Widget build(BuildContext context) {
-    final hasSavedOutline = savedOutline != null && savedOutline!.trim().isNotEmpty;
-
     return Scaffold(
       appBar: AppBar(title: const Text('Upload to NeuroForge')),
       body: Padding(
@@ -185,11 +196,10 @@ class _UploadPageState extends State<UploadPage> {
             const SizedBox(height: 20),
             if (_isLoading) const LinearProgressIndicator(),
             const Spacer(),
-            if (hasSavedOutline)
-              ElevatedButton(
-                onPressed: _viewSavedOutline,
-                child: const Text('📚 Review Previous Outline'),
-              ),
+            ElevatedButton(
+              onPressed: _viewSavedUploads,
+              child: const Text('📚 Review Previous Uploads'),
+            ),
           ],
         ),
       ),

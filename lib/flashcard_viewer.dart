@@ -22,6 +22,7 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
 
   void _nextCard() {
     if (widget.flashcards.isEmpty) return;
+
     setState(() {
       _currentIndex = (_currentIndex + 1) % widget.flashcards.length;
       _showAnswer = false;
@@ -31,6 +32,13 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
   void _handleFeedback(String rating) {
     print('User chose: $rating'); // Future: hook into SRS logic here
     _nextCard();
+  }
+
+  void _restartDeck() {
+    setState(() {
+      _currentIndex = 0;
+      _showAnswer = false;
+    });
   }
 
   void _viewOutline() {
@@ -57,19 +65,27 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.flashcards.isEmpty) {
+    final flashcards = widget.flashcards;
+
+    if (flashcards.isEmpty) {
       return const Center(child: Text('No flashcards to display.'));
     }
 
-    final flashcard = widget.flashcards[_currentIndex];
+    final flashcard = flashcards[_currentIndex];
+    final cardCount = flashcards.length;
 
     return SingleChildScrollView(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 40.0), // prevent clipping on small screens
+        padding: const EdgeInsets.only(bottom: 40),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const SizedBox(height: 40),
+            Text(
+              'Card ${_currentIndex + 1} of $cardCount',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 10),
             GestureDetector(
               onTap: () {
                 setState(() {
@@ -80,7 +96,9 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
                 color: Colors.white,
                 elevation: 8,
                 margin: const EdgeInsets.symmetric(horizontal: 20),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
                 child: Container(
                   padding: const EdgeInsets.all(24),
                   height: 250,
@@ -118,11 +136,17 @@ class _FlashcardViewerState extends State<FlashcardViewer> {
                 ),
               ],
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
             if (widget.outlineText != null && widget.outlineText!.isNotEmpty)
               ElevatedButton(
                 onPressed: _viewOutline,
-                child: const Text('View Outline'),
+                child: const Text('📖 View Outline'),
+              ),
+            const SizedBox(height: 16),
+            if (_currentIndex == cardCount - 1)
+              ElevatedButton(
+                onPressed: _restartDeck,
+                child: const Text('🔁 Restart Deck'),
               ),
           ],
         ),
