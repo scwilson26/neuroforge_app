@@ -12,14 +12,19 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
-  # ✅ Added for backend communication and file picking
+  # ✅ Backend communication & file picking
   http: ^1.4.0
   file_picker: ^10.2.1
+
+  # ✅ Markdown outline viewer
   flutter_markdown: ^0.7.7+1
 
-  # ✅ Added for local storage (Hive)
+  # ✅ Local storage (Hive)
   hive: ^2.2.3
   hive_flutter: ^1.1.0
+
+  # ✅ Utilities for export / file paths
+  share_plus: ^10.0.2
   path_provider: ^2.1.1
 
 dev_dependencies:
