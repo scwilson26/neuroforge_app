@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'flashcard.dart';
 import 'flashcard_viewer.dart';
@@ -21,7 +23,7 @@ final dummyCards = [
   ),
   Flashcard(
     question: 'How do you flip a flashcard?',
-    answer: 'Just tap the card to toggle between question and answer.',
+    answer: 'Tap the card to toggle Q/A.',
   ),
 ];
 
@@ -35,13 +37,12 @@ Future<void> _ensureHive() async {
   }
 }
 
-/// Resolve API URL for web vs Android emulator.
-/// - Web: use 127.0.0.1 (browser hits your machine directly)
-/// - Android emulator: host machine is 10.0.2.2
-String get _apiUrl {
-  final base = kIsWeb ? 'http://127.0.0.1:8000' : 'http://10.0.2.2:8000';
-  return '$base/preview-study-pack';
-}
+/// Android emulator uses 10.0.2.2 to reach host; web uses 127.0.0.1.
+String get _baseUrl =>
+    kIsWeb ? 'http://127.0.0.1:8000' : 'http://10.0.2.2:8000';
+
+String get _previewUrl => '$_baseUrl/preview-study-pack';
+String get _zipUrl => '$_baseUrl/generate-study-pack';
 
 void main() async {
   await _ensureHive();
@@ -90,78 +91,75 @@ class UploadPage extends StatefulWidget {
 class _UploadPageState extends State<UploadPage> {
   bool _isLoading = false;
 
-  Future<void> _pickAndUploadFile() async {
+  // Store last-picked files + preview to enable post-upload options
+  List<PlatformFile>? _lastPickedFiles;
+  List<Flashcard> _lastFlashcards = [];
+  String _lastOutline = '';
+  String? _lastLabel; // for Saved Uploads entry
+
+  Future<List<PlatformFile>?> _pickFiles() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'],
+      withData: true,
+      allowMultiple: true, // matches your backend
+    );
+    if (result == null || result.files.isEmpty) return null;
+    return result.files;
+  }
+
+  Future<void> _uploadForPreview() async {
     setState(() => _isLoading = true);
-
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'],
-        withData: true, // web needs this
-      );
+      final files = await _pickFiles();
+      if (files == null) return;
 
-      if (result == null || result.files.isEmpty) {
-        return; // user canceled
+      final req = http.MultipartRequest('POST', Uri.parse(_previewUrl));
+      for (final f in files) {
+        if (f.bytes != null) {
+          req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
+        } else if (f.path != null) {
+          req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
+        } else {
+          _showError('Could not read one of the selected files.');
+          return;
+        }
       }
 
-      final picked = result.files.first;
-      final fileName = picked.name;
+      final streamed = await req.send();
+      final resp = await http.Response.fromStream(streamed);
 
-      final request = http.MultipartRequest('POST', Uri.parse(_apiUrl));
+      if (resp.statusCode == 200) {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        final rawCards = List<Map<String, dynamic>>.from(body['flashcards']);
+        final outline = body['outline'] as String? ?? '';
 
-      if (picked.bytes != null) {
-        // Web (and sometimes desktop) gives bytes
-        request.files.add(
-          http.MultipartFile.fromBytes('files', picked.bytes!, filename: fileName),
-        );
-      } else if (picked.path != null) {
-        // Mobile/desktop path upload without needing dart:io import
-        request.files.add(
-          await http.MultipartFile.fromPath('files', picked.path!, filename: fileName),
-        );
-      } else {
-        _showError('Could not read the selected file.');
-        return;
-      }
-
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
-
-      if (response.statusCode == 200) {
-        final jsonBody = jsonDecode(response.body);
-
-        // Parse flashcards
-        final rawCards = List<Map<String, dynamic>>.from(jsonBody['flashcards']);
-        final flashcardObjects = rawCards
+        final cards = rawCards
             .map((c) => Flashcard(question: c['front'], answer: c['back']))
             .toList();
 
-        // Parse outline
-        final outline = jsonBody['outline'] as String? ?? '';
-
-        // Save the full set under file name
+        // Save preview to Hive
         final box = Hive.box('study_data');
-        await box.put(fileName, {
+        final label =
+            'Upload ${DateTime.now().toIso8601String().replaceAll("T", " ").split(".").first}';
+        await box.put(label, {
           'flashcards': rawCards,
           'outline': outline,
           'savedAt': DateTime.now().toIso8601String(),
         });
 
-        if (!mounted) return;
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => Scaffold(
-              appBar: AppBar(title: Text(fileName)),
-              body: FlashcardViewer(
-                flashcards: flashcardObjects,
-                outlineText: outline,
-              ),
-            ),
-          ),
+        setState(() {
+          _lastPickedFiles = files;
+          _lastFlashcards = cards;
+          _lastOutline = outline;
+          _lastLabel = label;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Upload complete. Choose an option below.')),
         );
       } else {
-        _showError('Failed: ${response.statusCode}\n${response.body}');
+        _showError('Preview failed: ${resp.statusCode}\n${resp.body}');
       }
     } catch (e) {
       _showError('Upload error: $e');
@@ -170,11 +168,86 @@ class _UploadPageState extends State<UploadPage> {
     }
   }
 
+  Future<void> _useFlashcardsNow() async {
+    if (_lastFlashcards.isEmpty) {
+      _showError('Upload a file first.');
+      return;
+    }
+    final title = _lastLabel ?? 'Flashcards';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: FlashcardViewer(
+            flashcards: _lastFlashcards,
+            outlineText: _lastOutline,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadOrShareZip() async {
+    if (_lastPickedFiles == null || _lastPickedFiles!.isEmpty) {
+      _showError('Upload a file first.');
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse(_zipUrl));
+      for (final f in _lastPickedFiles!) {
+        if (f.bytes != null) {
+          req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
+        } else if (f.path != null) {
+          req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
+        }
+      }
+
+      final streamed = await req.send();
+      final resp = await http.Response.fromStream(streamed);
+
+      if (resp.statusCode == 200) {
+        final bytes = resp.bodyBytes;
+
+        if (kIsWeb) {
+          // Web: save ZIP directly
+          await FileSaver.instance.saveFile(
+            name: 'neuroforge_study_pack',
+            bytes: bytes,
+            ext: 'zip',
+            mimeType: MimeType.other,
+          );
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('ZIP saved.')),
+          );
+        } else {
+          // Android/iOS/Desktop: open native share sheet (Gmail/Drive/Files…)
+          await Share.shareXFiles(
+            [
+              XFile.fromData(
+                bytes,
+                name: 'study_pack.zip',
+                mimeType: 'application/zip',
+              ),
+            ],
+            text: 'NeuroForge study pack (.csv + .md + .apkg)',
+            subject: 'NeuroForge study pack',
+          );
+        }
+      } else {
+        _showError('Download failed: ${resp.statusCode}\n${resp.body}');
+      }
+    } catch (e) {
+      _showError('Download error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   void _viewSavedUploads() {
     final box = Hive.box('study_data');
-    final keys = box.keys
-        .where((k) => k != 'dark_mode') // filter out settings key
-        .toList();
+    final keys = box.keys.where((k) => k != 'dark_mode').toList();
 
     Navigator.push(
       context,
@@ -199,7 +272,7 @@ class _UploadPageState extends State<UploadPage> {
                           await box.delete(fileName);
                           if (!mounted) return;
                           Navigator.pop(context);
-                          _viewSavedUploads(); // refresh list
+                          _viewSavedUploads(); // refresh
                         },
                       ),
                       onTap: () {
@@ -259,6 +332,9 @@ class _UploadPageState extends State<UploadPage> {
     final isDark =
         Hive.box('study_data').get('dark_mode', defaultValue: false) as bool;
 
+    final bool hasPostUploadOptions =
+        _lastPickedFiles != null && _lastFlashcards.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Upload to NeuroForge'),
@@ -275,15 +351,44 @@ class _UploadPageState extends State<UploadPage> {
         child: Column(
           children: [
             ElevatedButton(
-              onPressed: _isLoading ? null : _pickAndUploadFile,
-              child: const Text('Select and Upload File'),
+              onPressed: _isLoading ? null : _uploadForPreview,
+              child: const Text('📤 Upload file'),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+
+            if (hasPostUploadOptions) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isLoading ? null : _useFlashcardsNow,
+                      child: const Text('📚 Use flashcards now'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _downloadOrShareZip,
+                      child: Text(kIsWeb
+                          ? '⬇️ Download full study pack'
+                          : '📤 Share/Download full study pack'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Full pack includes CSV + outline.md + Anki .apkg',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+            ],
+
             if (_isLoading) const LinearProgressIndicator(),
             const Spacer(),
             ElevatedButton(
               onPressed: _viewSavedUploads,
-              child: const Text('📚 Review Previous Uploads'),
+              child: const Text('📦 Review Previous Uploads'),
             ),
           ],
         ),
