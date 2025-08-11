@@ -104,7 +104,7 @@ class _UploadPageState extends State<UploadPage> {
       withData: true,
       allowMultiple: true, // matches your backend
     );
-    if (result == null || result.files.isEmpty) return null;
+    if (result == null || result.files.isNotEmpty == false) return null;
     return result.files;
   }
 
@@ -182,6 +182,7 @@ class _UploadPageState extends State<UploadPage> {
           body: FlashcardViewer(
             flashcards: _lastFlashcards,
             outlineText: _lastOutline,
+            originalFiles: _lastPickedFiles, // ✅ pass original files to viewer
           ),
         ),
       ),
@@ -292,6 +293,7 @@ class _UploadPageState extends State<UploadPage> {
                               body: FlashcardViewer(
                                 flashcards: flashcardObjects,
                                 outlineText: outline,
+                                // no originalFiles here (loaded from storage)
                               ),
                             ),
                           ),

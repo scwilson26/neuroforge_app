@@ -1,7 +1,9 @@
-import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
+import 'package:file_saver/file_saver.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'flashcard.dart';
@@ -10,10 +12,15 @@ class FlashcardViewer extends StatefulWidget {
   final List<Flashcard> flashcards;
   final String? outlineText;
 
+  /// If provided, we’ll use these files to build the full ZIP
+  /// without asking the user to re-pick.
+  final List<PlatformFile>? originalFiles;
+
   const FlashcardViewer({
     super.key,
     required this.flashcards,
     this.outlineText,
+    this.originalFiles,
   });
 
   @override
@@ -21,259 +28,205 @@ class FlashcardViewer extends StatefulWidget {
 }
 
 class _FlashcardViewerState extends State<FlashcardViewer> {
-  late List<Flashcard> _deck;
-  int _currentIndex = 0;
-  bool _showAnswer = false;
-  bool _shuffle = false;
+  int index = 0;
+  bool showAnswer = false;
+  bool _busy = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _deck = List<Flashcard>.from(widget.flashcards);
-  }
+  String get _baseUrl =>
+      kIsWeb ? 'http://127.0.0.1:8000' : 'http://10.0.2.2:8000';
+  String get _zipUrl => '$_baseUrl/generate-study-pack';
 
-  void _applyShuffle(bool value) {
+  void _next([bool resetAnswer = true]) {
     setState(() {
-      _shuffle = value;
-      _deck = List<Flashcard>.from(widget.flashcards);
-      if (_shuffle) _deck.shuffle();
-      _currentIndex = 0;
-      _showAnswer = false;
+      index = (index + 1) % widget.flashcards.length;
+      if (resetAnswer) showAnswer = false;
     });
   }
 
-  void _nextCard() {
-    if (_deck.isEmpty) return;
+  void _shuffle() {
     setState(() {
-      _currentIndex = (_currentIndex + 1) % _deck.length;
-      _showAnswer = false;
+      widget.flashcards.shuffle();
+      index = 0;
+      showAnswer = false;
     });
   }
 
-  void _restartDeck() {
-    setState(() {
-      _currentIndex = 0;
-      _showAnswer = false;
-    });
-  }
-
-  void _handleFeedback(String rating) {
-    // TODO: integrate SRS persistence (Hive) per card
-    debugPrint('User chose: $rating (idx=$_currentIndex)');
-    _nextCard();
-  }
-
-  Future<void> _exportCsv() async {
-    // Build CSV
-    final buffer = StringBuffer()..writeln('front,back');
-    for (final c in _deck) {
-      final front = _csvEscape(c.question);
-      final back = _csvEscape(c.answer);
-      buffer.writeln('$front,$back');
+  Future<void> _shareOrDownloadFullPack() async {
+    // If we don’t have the original upload files, we can’t hit /generate-study-pack
+    // without asking the user to re-pick. In that case, nudge them.
+    if (widget.originalFiles == null || widget.originalFiles!.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Re-upload files from the main screen to share the full pack.')),
+      );
+      return;
     }
 
-    // Write to temp
-    final dir = await getTemporaryDirectory();
-    final path = '${dir.path}/neuroforge_flashcards.csv';
-    final file = File(path);
-    await file.writeAsString(buffer.toString());
+    setState(() => _busy = true);
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse(_zipUrl));
+      for (final f in widget.originalFiles!) {
+        if (f.bytes != null) {
+          req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
+        } else if (f.path != null) {
+          req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
+        }
+      }
 
-    // Share
-    await Share.shareXFiles(
-      [XFile(path)],
-      text: 'NeuroForge flashcards (CSV)',
-      subject: 'NeuroForge Flashcards',
-    );
-  }
+      final streamed = await req.send();
+      final resp = await http.Response.fromStream(streamed);
 
-  String _csvEscape(String s) {
-    final needsQuotes = s.contains(',') || s.contains('"') || s.contains('\n');
-    final escaped = s.replaceAll('"', '""');
-    return needsQuotes ? '"$escaped"' : escaped;
-  }
+      if (resp.statusCode == 200) {
+        final bytes = resp.bodyBytes;
 
-  void _viewOutline() {
-    final text = widget.outlineText ?? '';
-    if (text.isEmpty) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => OutlineScreen(markdownText: text),
-      ),
-    );
+        if (kIsWeb) {
+          await FileSaver.instance.saveFile(
+            name: 'neuroforge_study_pack',
+            bytes: bytes,
+            ext: 'zip',
+            mimeType: MimeType.other,
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('ZIP downloaded.')),
+          );
+        } else {
+          await Share.shareXFiles(
+            [XFile.fromData(bytes, name: 'study_pack.zip', mimeType: 'application/zip')],
+            text: 'NeuroForge study pack (.csv + .md + .apkg)',
+            subject: 'NeuroForge study pack',
+          );
+        }
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: ${resp.statusCode}\n${resp.body}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_deck.isEmpty) {
-      return const Center(child: Text('No flashcards to display.'));
-    }
+    final card = widget.flashcards[index];
 
-    final flashcard = _deck[_currentIndex];
-    final cardCount = _deck.length;
+    return Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header row
+              Row(
+                children: [
+                  Text('Card ${index + 1} of ${widget.flashcards.length}',
+                      style: Theme.of(context).textTheme.bodyMedium),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: _busy ? null : _shuffle,
+                    child: const Text('Shuffle'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: _busy ? null : _shareOrDownloadFullPack,
+                    icon: const Icon(Icons.ios_share),
+                    label: Text(kIsWeb
+                        ? 'Download Full Study Pack'
+                        : 'Share/Download Full Study Pack'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 40),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'Card ${_currentIndex + 1} of $cardCount',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(width: 16),
-                FilterChip(
-                  label: const Text('Shuffle'),
-                  selected: _shuffle,
-                  onSelected: _applyShuffle,
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _exportCsv,
-                  icon: const Icon(Icons.download),
-                  label: const Text('Export CSV'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: () => setState(() => _showAnswer = !_showAnswer),
-              child: Card(
-                elevation: 8,
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Container(
-                  padding: const EdgeInsets.all(24),
-                  height: 250,
-                  alignment: Alignment.center,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 250),
-                    child: Text(
-                      _showAnswer ? flashcard.answer : flashcard.question,
-                      key: ValueKey(_showAnswer),
-                      style: const TextStyle(fontSize: 20),
-                      textAlign: TextAlign.center,
+              // Card
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() => showAnswer = !showAnswer),
+                  child: Card(
+                    elevation: 6,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(
+                          showAnswer ? card.answer : card.question,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                  onPressed: () => _handleFeedback('Again'),
-                  child: const Text('Again'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                  onPressed: () => _handleFeedback('Good'),
-                  child: const Text('Good'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                  onPressed: () => _handleFeedback('Easy'),
-                  child: const Text('Easy'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if ((widget.outlineText ?? '').isNotEmpty)
-              ElevatedButton.icon(
-                onPressed: _viewOutline,
-                icon: const Icon(Icons.menu_book),
-                label: const Text('View Outline'),
+
+              const SizedBox(height: 12),
+
+              // Simple review buttons (placeholder)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _pill('Again', Colors.red.shade400, () => _next()),
+                  _pill('Good', Colors.orange.shade400, () => _next()),
+                  _pill('Easy', Colors.green.shade400, () => _next()),
+                ],
               ),
-            const SizedBox(height: 16),
-            if (_currentIndex == cardCount - 1)
-              ElevatedButton.icon(
-                onPressed: _restartDeck,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Restart Deck'),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
-class OutlineScreen extends StatefulWidget {
-  final String markdownText;
-  const OutlineScreen({super.key, required this.markdownText});
+              const SizedBox(height: 12),
 
-  @override
-  State<OutlineScreen> createState() => _OutlineScreenState();
-}
-
-class _OutlineScreenState extends State<OutlineScreen> {
-  final _search = TextEditingController();
-  String _query = '';
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = _query.trim().isEmpty
-        ? widget.markdownText
-        : _filterMarkdown(widget.markdownText, _query);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Outline'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(56),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                hintText: 'Search in outline…',
-                filled: true,
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+              if ((widget.outlineText ?? '').isNotEmpty)
+                Center(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.menu_book_outlined),
+                    label: const Text('View Outline'),
+                    onPressed: () {
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        builder: (_) => DraggableScrollableSheet(
+                          expand: false,
+                          builder: (ctx, sc) => SingleChildScrollView(
+                            controller: sc,
+                            padding: const EdgeInsets.all(16),
+                            child: Text(widget.outlineText!),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
-              ),
-              onChanged: (v) => setState(() => _query = v),
-            ),
+            ],
           ),
         ),
-      ),
-      body: Markdown(
-        data: filtered,
-        padding: const EdgeInsets.all(16),
-        styleSheet: MarkdownStyleSheet(
-          h1: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          h2: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-          p: const TextStyle(fontSize: 16),
-        ),
-      ),
+
+        if (_busy)
+          Container(
+            color: Colors.black26,
+            child: const Center(child: CircularProgressIndicator()),
+          ),
+      ],
     );
   }
 
-  String _filterMarkdown(String md, String q) {
-    final query = q.toLowerCase();
-    final lines = md.split('\n');
-    final kept = <String>[];
-    for (final line in lines) {
-      if (line.toLowerCase().contains(query)) kept.add(line);
-    }
-    // Show original if nothing matches to avoid a blank screen
-    return kept.isEmpty ? md : kept.join('\n');
+  Widget _pill(String text, Color color, VoidCallback onTap) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        shape: const StadiumBorder(),
+        elevation: 2,
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+      ),
+      onPressed: onTap,
+      child: Text(text),
+    );
   }
 }
