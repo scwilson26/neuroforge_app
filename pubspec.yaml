@@ -1,7 +1,6 @@
 name: neuroforge_app
-description: "A new Flutter project."
+description: "NeuroForge MVP – Android uploader"
 publish_to: 'none'
-
 version: 1.0.0+1
 
 environment:
@@ -11,24 +10,11 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-
-  # ✅ Backend communication & file picking
   http: ^1.4.0
   file_picker: ^10.2.1
-
-  # ✅ Save ZIP to device / browser
   file_saver: ^0.2.12
-
-  # ✅ Markdown outline viewer
-  flutter_markdown: ^0.7.7+1
-
-  # ✅ Local storage (Hive)
-  hive: ^2.2.3
-  hive_flutter: ^1.1.0
-
-  # ✅ Utilities (you can keep for later even if not used yet)
   share_plus: ^10.0.2
-  path_provider: ^2.1.1
+  google_fonts: ^6.2.1
 
 dev_dependencies:
   flutter_test:
@@ -37,3 +23,4 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
