@@ -13,52 +13,68 @@ void main() => runApp(const UplinApp());
 class UplinApp extends StatelessWidget {
   const UplinApp({super.key});
 
+  static const Color tealBg = Color(0xFF0097A7);
+  static const Color white = Colors.white;
+  static const Color black = Colors.black;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Uplin – Study Pack',
       theme: ThemeData(
-        scaffoldBackgroundColor: Colors.black,
+        scaffoldBackgroundColor: tealBg, // App background
         textTheme: GoogleFonts.poppinsTextTheme().apply(
-          bodyColor: Colors.white,
-          displayColor: Colors.white,
+          bodyColor: white, // default text = white
+          displayColor: white,
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.black,
+          backgroundColor: tealBg, // match background
           foregroundColor: Colors.white,
           elevation: 0,
           centerTitle: true,
         ),
+        // Solid buttons: black background, white text
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) return const Color(0xFF1E2A3A);
-              return Colors.blueAccent;
+            backgroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+              if (states.contains(MaterialState.disabled)) return Colors.black54;
+              return black;
             }),
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) return Colors.white70;
-              return Colors.white;
-            }),
-            shape: WidgetStateProperty.all(
+            foregroundColor: MaterialStateProperty.all<Color>(white),
+            overlayColor: MaterialStateProperty.all<Color>(Colors.white12),
+            shape: MaterialStateProperty.all(
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            padding: WidgetStateProperty.all(const EdgeInsets.symmetric(vertical: 14)),
+            padding: MaterialStateProperty.all(
+              const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            ),
           ),
         ),
+        // Outlined buttons: white background, black text, black border
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(
-            side: WidgetStateProperty.resolveWith((states) {
-              final c = states.contains(WidgetState.disabled) ? Colors.white24 : Colors.blueAccent;
-              return BorderSide(color: c, width: 1.5);
+            side: MaterialStateProperty.resolveWith<BorderSide>((states) {
+              final color = states.contains(MaterialState.disabled) ? Colors.black26 : black;
+              return BorderSide(color: color, width: 1.5);
             }),
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              return states.contains(WidgetState.disabled) ? Colors.white70 : Colors.blueAccent;
+            backgroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+              if (states.contains(MaterialState.disabled)) return Colors.white70;
+              return white;
             }),
-            shape: WidgetStateProperty.all(
+            foregroundColor: MaterialStateProperty.all<Color>(black),
+            overlayColor: MaterialStateProperty.all<Color>(Colors.black12),
+            shape: MaterialStateProperty.all(
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            padding: WidgetStateProperty.all(const EdgeInsets.symmetric(vertical: 14)),
+            padding: MaterialStateProperty.all(
+              const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            ),
           ),
+        ),
+        snackBarTheme: const SnackBarThemeData(
+          backgroundColor: black,
+          contentTextStyle: TextStyle(color: white),
+          behavior: SnackBarBehavior.floating,
         ),
       ),
       home: const UploadPage(),
@@ -79,11 +95,9 @@ class _UploadPageState extends State<UploadPage> {
   String _status = 'Pick files and generate a study pack.';
   final String api = 'http://10.0.2.2:8000/generate-study-pack';
 
+  // Keep text strictly white/black; default is white on teal.
   Color get _statusColor {
-    if (_status.startsWith('Error')) return Colors.redAccent;
-    if (_status.startsWith('Ready')) return Colors.lightBlueAccent;
-    if (_status.startsWith('Saved')) return Colors.lightBlueAccent;
-    return Colors.white70;
+    return Colors.black;
   }
 
   Future<void> _pickUploadGenerate() async {
@@ -176,7 +190,43 @@ class _UploadPageState extends State<UploadPage> {
   Widget build(BuildContext context) {
     final ready = _zipBytes != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Uplin')),
+      appBar: AppBar(
+        toolbarHeight: 84, // taller bar
+        centerTitle: true,
+        title: Align(
+          alignment: Alignment.bottomCenter, // pull the title down
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Stack(
+              children: [
+                // Black outline (stroke)
+                Text(
+                  'Uplin',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    foreground: Paint()
+                      ..style = PaintingStyle.stroke
+                      ..strokeWidth = 3
+                      ..color = Colors.black,
+                  ),
+                ),
+                // White fill
+                const Text(
+                  'Uplin',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -186,33 +236,48 @@ class _UploadPageState extends State<UploadPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Tagline
+                  // Tagline (white text on teal background)
                   Text(
                     "The future of learning — fast, efficient, AI-powered.",
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: Colors.white70,
+                          color: Colors.white,
                           fontSize: 16,
                           fontStyle: FontStyle.italic,
                         ),
                   ),
                   const SizedBox(height: 24),
 
-                  // Upload box
+                  // Upload card: white background, black text
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F1115),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: Colors.black12),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          _status,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: _statusColor),
+                        // Status text black for readability on white card
+                        DefaultTextStyle(
+                          style: const TextStyle(color: Colors.black),
+                          child: Text(
+                            _status,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _statusColor,
+                              fontSize: 14,
+                              height: 1.3,
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 16),
                         ElevatedButton(
