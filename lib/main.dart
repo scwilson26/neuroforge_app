@@ -1,11 +1,7 @@
-import 'dart:typed_data';
-import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
-import 'package:file_saver/file_saver.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 void main() => runApp(const UplinApp());
@@ -36,16 +32,16 @@ class UplinApp extends StatelessWidget {
         // Solid buttons: black background, white text
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.resolveWith<Color>((states) {
-              if (states.contains(MaterialState.disabled)) return Colors.black54;
+            backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
+              if (states.contains(WidgetState.disabled)) return Colors.black54;
               return black;
             }),
-            foregroundColor: MaterialStateProperty.all<Color>(white),
-            overlayColor: MaterialStateProperty.all<Color>(Colors.white12),
-            shape: MaterialStateProperty.all(
+            foregroundColor: WidgetStateProperty.all<Color>(white),
+            overlayColor: WidgetStateProperty.all<Color>(Colors.white12),
+            shape: WidgetStateProperty.all(
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            padding: MaterialStateProperty.all(
+            padding: WidgetStateProperty.all(
               const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
             ),
           ),
@@ -53,20 +49,20 @@ class UplinApp extends StatelessWidget {
         // Outlined buttons: white background, black text, black border
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(
-            side: MaterialStateProperty.resolveWith<BorderSide>((states) {
-              final color = states.contains(MaterialState.disabled) ? Colors.black26 : black;
+            side: WidgetStateProperty.resolveWith<BorderSide>((states) {
+              final color = states.contains(WidgetState.disabled) ? Colors.black26 : black;
               return BorderSide(color: color, width: 1.5);
             }),
-            backgroundColor: MaterialStateProperty.resolveWith<Color>((states) {
-              if (states.contains(MaterialState.disabled)) return Colors.white70;
+            backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
+              if (states.contains(WidgetState.disabled)) return Colors.white70;
               return white;
             }),
-            foregroundColor: MaterialStateProperty.all<Color>(black),
-            overlayColor: MaterialStateProperty.all<Color>(Colors.black12),
-            shape: MaterialStateProperty.all(
+            foregroundColor: WidgetStateProperty.all<Color>(black),
+            overlayColor: WidgetStateProperty.all<Color>(Colors.black12),
+            shape: WidgetStateProperty.all(
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            padding: MaterialStateProperty.all(
+            padding: WidgetStateProperty.all(
               const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
             ),
           ),
@@ -77,8 +73,112 @@ class UplinApp extends StatelessWidget {
           behavior: SnackBarBehavior.floating,
         ),
       ),
-      home: const UploadPage(),
+      home: const FrontPage(),
       debugShowCheckedModeBanner: false,
+    );
+  }
+}
+
+class FrontPage extends StatelessWidget {
+  const FrontPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        toolbarHeight: 84,
+        centerTitle: true,
+        title: Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Stack(
+              children: [
+                Text(
+                  'Uplin',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    foreground: Paint()
+                      ..style = PaintingStyle.stroke
+                      ..strokeWidth = 3
+                      ..color = Colors.black,
+                  ),
+                ),
+                const Text(
+                  'Uplin',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "The future of learning — fast, efficient, AI-powered.",
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontStyle: FontStyle.italic,
+                        ),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.black12),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Welcome to Uplin. Turn your notes into flashcards instantly.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.black),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const UploadPage()),
+                            );
+                          },
+                          child: const Text('Upload Study Notes'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -91,9 +191,10 @@ class UploadPage extends StatefulWidget {
 
 class _UploadPageState extends State<UploadPage> {
   bool _loading = false;
-  Uint8List? _zipBytes;
-  String _status = 'Pick files and generate a study pack.';
-  final String api = 'http://10.0.2.2:8000/generate-study-pack';
+  String _status = 'Pick files and generate flashcards.';
+  final String api = 'http://10.0.2.2:8000/preview-study-pack?limit=200';
+  List<Map<String, dynamic>> _flashcards = const [];
+  String? _outline;
 
   // Keep text strictly white/black; default is white on teal.
   Color get _statusColor {
@@ -104,7 +205,8 @@ class _UploadPageState extends State<UploadPage> {
     setState(() {
       _loading = true;
       _status = 'Picking files…';
-      _zipBytes = null;
+      _flashcards = const [];
+      _outline = null;
     });
 
     final picked = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
@@ -116,7 +218,7 @@ class _UploadPageState extends State<UploadPage> {
       return;
     }
 
-    setState(() => _status = 'Uploading & generating…');
+    setState(() => _status = 'Uploading & generating flashcards…');
 
     final req = http.MultipartRequest('POST', Uri.parse(api));
     for (final f in picked.files) {
@@ -132,9 +234,13 @@ class _UploadPageState extends State<UploadPage> {
       final streamed = await req.send();
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        final outline = body['outline'] as String?;
         setState(() {
-          _zipBytes = res.bodyBytes;
-          _status = 'Ready — tap Download or Share.';
+          _flashcards = cards;
+          _outline = outline;
+          _status = 'Generated ${cards.length} flashcards.';
         });
       } else {
         setState(() {
@@ -148,47 +254,8 @@ class _UploadPageState extends State<UploadPage> {
     }
   }
 
-  Future<void> _saveZip() async {
-    if (_zipBytes == null) return;
-    await FileSaver.instance.saveFile(
-      name: 'study_pack',
-      bytes: _zipBytes!,
-      ext: 'zip',
-      mimeType: MimeType.other,
-    );
-    setState(() => _status = 'Saved to device as study_pack.zip');
-  }
-
-  Future<void> _shareZip() async {
-    if (_zipBytes == null) return;
-    try {
-      await Share.shareXFiles(
-        [XFile.fromData(_zipBytes!, name: 'study_pack.zip', mimeType: 'application/zip')],
-        subject: 'Uplin study pack',
-        text: 'ZIP contains flashcards.csv, outline.md, and study.apkg',
-      );
-      return;
-    } catch (_) {}
-    try {
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/study_pack.zip');
-      await file.writeAsBytes(_zipBytes!, flush: true);
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'application/zip', name: 'study_pack.zip')],
-        subject: 'Uplin study pack',
-        text: 'ZIP contains flashcards.csv, outline.md, and study.apkg',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Share failed: $e')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final ready = _zipBytes != null;
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 84, // taller bar
@@ -228,14 +295,15 @@ class _UploadPageState extends State<UploadPage> {
         ),
       ),
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
+        child: SingleChildScrollView(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                   // Tagline (white text on teal background)
                   Text(
                     "The future of learning — fast, efficient, AI-powered.",
@@ -284,28 +352,109 @@ class _UploadPageState extends State<UploadPage> {
                           onPressed: _loading ? null : _pickUploadGenerate,
                           child: Text(_loading ? 'Working…' : 'Choose files & Generate'),
                         ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: ready ? _saveZip : null,
-                                child: const Text('Download ZIP'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: ready ? _shareZip : null,
-                                child: const Text('Share ZIP'),
-                              ),
-                            ),
-                          ],
-                        ),
                       ],
                     ),
                   ),
-                ],
+
+                  // Flashcards list (if any)
+                  if (_flashcards.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.black12),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 10,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'Flashcards (${_flashcards.length})',
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: _flashcards.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (context, i) {
+                              final c = _flashcards[i];
+                              final front = (c['front'] ?? '').toString();
+                              final back = (c['back'] ?? '').toString();
+                              return Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.black12),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Q: $front', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600)),
+                                      const SizedBox(height: 6),
+                                      Text('A: $back', style: const TextStyle(color: Colors.black87)),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (_outline != null && _outline!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () {
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.white,
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                          ),
+                          builder: (_) {
+                            return DraggableScrollableSheet(
+                              initialChildSize: 0.8,
+                              expand: false,
+                              builder: (context, controller) {
+                                return Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: ListView(
+                                    controller: controller,
+                                    children: [
+                                      const Text('Outline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black)),
+                                      const SizedBox(height: 12),
+                                      Text(_outline!, style: const TextStyle(color: Colors.black87)),
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        );
+                      },
+                      child: const Text('View Outline'),
+                    ),
+                  ],
+                  ],
+                ),
               ),
             ),
           ),
