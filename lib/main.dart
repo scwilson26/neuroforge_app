@@ -394,23 +394,11 @@ class _UploadPageState extends State<UploadPage> {
                               final c = _flashcards[i];
                               final front = (c['front'] ?? '').toString();
                               final back = (c['back'] ?? '').toString();
-                              return Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.black12),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(12),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text('Q: $front', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600)),
-                                      const SizedBox(height: 6),
-                                      Text('A: $back', style: const TextStyle(color: Colors.black87)),
-                                    ],
-                                  ),
-                                ),
+                              return FlashcardTile(
+                                key: ValueKey('fc_$i'),
+                                index: i,
+                                front: front,
+                                back: back,
                               );
                             },
                           ),
@@ -457,6 +445,96 @@ class _UploadPageState extends State<UploadPage> {
                 ),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class FlashcardTile extends StatefulWidget {
+  final int index;
+  final String front;
+  final String back;
+
+  const FlashcardTile({super.key, required this.index, required this.front, required this.back});
+
+  @override
+  State<FlashcardTile> createState() => _FlashcardTileState();
+}
+
+class _FlashcardTileState extends State<FlashcardTile> {
+  bool _showBack = false;
+
+  void _toggle() => setState(() => _showBack = !_showBack);
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _toggle,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.black12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _showBack ? Colors.green.shade600 : Colors.blueGrey.shade700,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _showBack ? 'Answer' : 'Question',
+                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(_showBack ? Icons.visibility_off : Icons.visibility, color: Colors.black54, size: 18),
+                ],
+              ),
+              const SizedBox(height: 8),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, anim) {
+                  final rotate = Tween(begin: _showBack ? 1.0 : -1.0, end: 0.0).animate(anim);
+                  return AnimatedBuilder(
+                    animation: rotate,
+                    child: child,
+                    builder: (context, child) {
+                      final isUnder = (ValueKey(_showBack) != child!.key);
+                      var tilt = (anim.value - 0.5).abs() - 0.5;
+                      tilt *= isUnder ? -0.003 : 0.003;
+                      final value = 1 - anim.value;
+                      return Transform(
+                        transform: Matrix4.identity()
+                          ..setEntry(3, 2, 0.001)
+                          ..rotateY(value * (isUnder ? -1 : 1))
+                          ..setEntry(3, 0, tilt),
+                        child: child,
+                        alignment: Alignment.centerLeft,
+                      );
+                    },
+                  );
+                },
+                child: Text(
+                  _showBack ? widget.back : widget.front,
+                  key: ValueKey(_showBack),
+                  style: const TextStyle(color: Colors.black87),
+                ),
+              ),
+            ],
           ),
         ),
       ),
