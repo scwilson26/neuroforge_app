@@ -1,6 +1,6 @@
 {
-    "name": "neuroforge_app",
-    "short_name": "neuroforge_app",
+    "name": "Spaced",
+    "short_name": "Spaced",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

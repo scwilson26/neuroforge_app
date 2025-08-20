@@ -4,10 +4,10 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-void main() => runApp(const UplinApp());
+void main() => runApp(const SpacedApp());
 
-class UplinApp extends StatelessWidget {
-  const UplinApp({super.key});
+class SpacedApp extends StatelessWidget {
+  const SpacedApp({super.key});
 
   static const Color tealBg = Color(0xFF0097A7);
   static const Color white = Colors.white;
@@ -16,7 +16,7 @@ class UplinApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Uplin – Study Pack',
+      title: 'Spaced – Study Pack',
       theme: ThemeData(
         scaffoldBackgroundColor: tealBg, // App background
         textTheme: GoogleFonts.poppinsTextTheme().apply(
@@ -95,7 +95,7 @@ class FrontPage extends StatelessWidget {
             child: Stack(
               children: [
                 Text(
-                  'Uplin',
+                  'Spaced',
                   style: TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.w800,
@@ -107,7 +107,7 @@ class FrontPage extends StatelessWidget {
                   ),
                 ),
                 const Text(
-                  'Uplin',
+                  'Spaced',
                   style: TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.w800,
@@ -157,7 +157,7 @@ class FrontPage extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Text(
-                          'Welcome to Uplin. Turn your notes into flashcards instantly.',
+                          'Welcome to Spaced. Turn your notes into flashcards instantly.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.black),
                         ),
@@ -268,7 +268,7 @@ class _UploadPageState extends State<UploadPage> {
               children: [
                 // Black outline (stroke)
                 Text(
-                  'Uplin',
+                  'Spaced',
                   style: TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.w800,
@@ -281,7 +281,7 @@ class _UploadPageState extends State<UploadPage> {
                 ),
                 // White fill
                 const Text(
-                  'Uplin',
+                  'Spaced',
                   style: TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.w800,

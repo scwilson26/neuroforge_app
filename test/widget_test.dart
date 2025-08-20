@@ -11,7 +11,7 @@ import 'package:neuroforge_app/main.dart';
 
 void main() {
   testWidgets('FrontPage shows Upload Study Notes and navigates to UploadPage', (WidgetTester tester) async {
-    await tester.pumpWidget(const UplinApp());
+  await tester.pumpWidget(const SpacedApp());
 
     // Front page has the CTA button
     expect(find.text('Upload Study Notes'), findsOneWidget);
