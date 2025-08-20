@@ -540,6 +540,22 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
   late final PageController _controller;
   int _index = 0;
   bool _showBack = false;
+  // Per-session knowledge tracking
+  final Map<int, Knowledge> _ratings = {};
+
+  int get _knownCount => _ratings.values.where((r) => r == Knowledge.know).length;
+  int get _maybeCount => _ratings.values.where((r) => r == Knowledge.maybe).length;
+  int get _dunnoCount => _ratings.values.where((r) => r == Knowledge.dunno).length;
+
+  void _rate(Knowledge k) {
+    setState(() {
+      _ratings[_index] = k;
+    });
+    // Auto-advance to next card when rated, if possible
+    if (_index < widget.cards.length - 1) {
+      _controller.nextPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    }
+  }
 
   @override
   void initState() {
@@ -691,7 +707,47 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        // Knowledge summary
+        Text(
+          'Known: ' 
+          '$_knownCount · Maybe: $_maybeCount · Dunno: $_dunnoCount',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        // Knowledge rating buttons
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => _rate(Knowledge.know),
+                icon: const Icon(Icons.check),
+                label: const Text('I know it!'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => _rate(Knowledge.maybe),
+                icon: const Icon(Icons.help_outline),
+                label: const Text('Maybe know it...'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => _rate(Knowledge.dunno),
+                icon: const Icon(Icons.close),
+                label: const Text("I dunno"),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
 }
+
+// Simple per-card knowledge rating
+enum Knowledge { know, maybe, dunno }
