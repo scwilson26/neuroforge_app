@@ -385,23 +385,8 @@ class _UploadPageState extends State<UploadPage> {
                             ),
                           ),
                           const SizedBox(height: 12),
-                          ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: _flashcards.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                            itemBuilder: (context, i) {
-                              final c = _flashcards[i];
-                              final front = (c['front'] ?? '').toString();
-                              final back = (c['back'] ?? '').toString();
-                              return FlashcardTile(
-                                key: ValueKey('fc_$i'),
-                                index: i,
-                                front: front,
-                                back: back,
-                              );
-                            },
-                          ),
+                          // One-at-a-time flashcards with flip + swipe
+                          FlashcardSwiper(cards: _flashcards),
                         ],
                       ),
                     ),
@@ -538,6 +523,175 @@ class _FlashcardTileState extends State<FlashcardTile> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class FlashcardSwiper extends StatefulWidget {
+  final List<Map<String, dynamic>> cards;
+
+  const FlashcardSwiper({super.key, required this.cards});
+
+  @override
+  State<FlashcardSwiper> createState() => _FlashcardSwiperState();
+}
+
+class _FlashcardSwiperState extends State<FlashcardSwiper> {
+  late final PageController _controller;
+  int _index = 0;
+  bool _showBack = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController(viewportFraction: 0.92);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _toggleFlip() => setState(() => _showBack = !_showBack);
+
+  @override
+  Widget build(BuildContext context) {
+    // Safety: handle empty
+    if (widget.cards.isEmpty) {
+      return const SizedBox();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Card ${_index + 1} / ${widget.cards.length}',
+              style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            const Text('Tap to flip · Swipe for next', style: TextStyle(color: Colors.black54, fontSize: 12)),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 360,
+          child: PageView.builder(
+            controller: _controller,
+            onPageChanged: (i) {
+              setState(() {
+                _index = i;
+                _showBack = false; // reset on new card
+              });
+            },
+            itemCount: widget.cards.length,
+            itemBuilder: (context, i) {
+              final c = widget.cards[i];
+              final front = (c['front'] ?? '').toString();
+              final back = (c['back'] ?? '').toString();
+
+              return GestureDetector(
+                onTap: _toggleFlip,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.black12),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4)),
+                    ],
+                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _showBack ? Colors.green.shade600 : Colors.blueGrey.shade700,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              _showBack ? 'Answer' : 'Question',
+                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const Spacer(),
+                          Icon(_showBack ? Icons.flip_to_front : Icons.flip, color: Colors.black45, size: 18),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          switchInCurve: Curves.easeOut,
+                          switchOutCurve: Curves.easeIn,
+                          transitionBuilder: (child, anim) {
+                            final rotate = Tween(begin: _showBack ? 1.0 : -1.0, end: 0.0).animate(anim);
+                            return AnimatedBuilder(
+                              animation: rotate,
+                              child: child,
+                              builder: (context, child) {
+                                final isUnder = (ValueKey(_showBack) != child!.key);
+                                var tilt = (anim.value - 0.5).abs() - 0.5;
+                                tilt *= isUnder ? -0.003 : 0.003;
+                                final value = 1 - anim.value;
+                                return Transform(
+                                  transform: Matrix4.identity()
+                                    ..setEntry(3, 2, 0.001)
+                                    ..rotateY(value * (isUnder ? -1 : 1))
+                                    ..setEntry(3, 0, tilt),
+                                  alignment: Alignment.centerLeft,
+                                  child: child,
+                                );
+                              },
+                            );
+                          },
+                          child: SingleChildScrollView(
+                            key: ValueKey(_showBack),
+                            child: Text(
+                              _showBack ? back : front,
+                              style: const TextStyle(color: Colors.black87, height: 1.3),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              tooltip: 'Previous',
+              onPressed: _index > 0
+                  ? () => _controller.previousPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
+                  : null,
+              icon: const Icon(Icons.chevron_left, color: Colors.black87),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Next',
+              onPressed: _index < widget.cards.length - 1
+                  ? () => _controller.nextPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
+                  : null,
+              icon: const Icon(Icons.chevron_right, color: Colors.black87),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
