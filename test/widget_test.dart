@@ -10,8 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:neuroforge_app/main.dart';
 
 void main() {
-  testWidgets('FrontPage shows inline generate button', (WidgetTester tester) async {
+  testWidgets('Home shows upload button', (WidgetTester tester) async {
     await tester.pumpWidget(const SpacedApp());
-    expect(find.text('Choose files & Generate'), findsOneWidget);
+    expect(find.text('Upload Study Notes'), findsOneWidget);
   });
 }

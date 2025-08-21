@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() => runApp(const SpacedApp());
 
@@ -71,41 +72,29 @@ class SpacedApp extends StatelessWidget {
           behavior: SnackBarBehavior.floating,
         ),
       ),
-      home: const FrontPage(),
+  home: const HomePage(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class FrontPage extends StatefulWidget {
-  const FrontPage({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
   @override
-  State<FrontPage> createState() => _FrontPageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _FrontPageState extends State<FrontPage> {
+class _HomePageState extends State<HomePage> {
   bool _loading = false;
-  String _status = 'Pick files and generate flashcards.';
-  final String api = 'http://10.0.2.2:8000/preview-study-pack?limit=200';
-  List<Map<String, dynamic>> _flashcards = const [];
-  String? _outline;
+  String _status = '';
+  final String previewApi = 'http://10.0.2.2:8000/preview-study-pack?limit=200';
+  List<PlatformFile> _selectedFiles = [];
 
-  bool get _hasResults => _flashcards.isNotEmpty || (_outline != null && _outline!.trim().isNotEmpty);
-
-  void _resetToStart() {
-    setState(() {
-      _flashcards = const [];
-      _outline = null;
-      _status = 'Pick files and generate flashcards.';
-    });
-  }
-
-  Future<void> _pickUploadGenerate() async {
+  Future<void> _pickAndPreview() async {
     setState(() {
       _loading = true;
-      _status = 'Picking files…';
-      _flashcards = const [];
-      _outline = null;
+      _status = '';
+      _selectedFiles = [];
     });
 
     final picked = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
@@ -116,14 +105,12 @@ class _FrontPageState extends State<FrontPage> {
       });
       return;
     }
+    _selectedFiles = picked.files;
 
-    setState(() => _status = 'Uploading & generating flashcards…');
-
-    final req = http.MultipartRequest('POST', Uri.parse(api));
+    final req = http.MultipartRequest('POST', Uri.parse(previewApi));
     for (final f in picked.files) {
-      final bytes = f.bytes;
-      if (bytes != null) {
-        req.files.add(http.MultipartFile.fromBytes('files', bytes, filename: f.name));
+      if (f.bytes != null) {
+        req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
       } else if (f.path != null) {
         req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
       }
@@ -135,198 +122,330 @@ class _FrontPageState extends State<FrontPage> {
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
         final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        final outline = body['outline'] as String?;
-        setState(() {
-          _flashcards = cards;
-          _outline = outline;
-          _status = 'Generated ${cards.length} flashcards.';
-          _loading = false;
-        });
+        final outline = (body['outline'] ?? '').toString();
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PreviewScreen(
+              originalFiles: _selectedFiles,
+              flashcards: cards,
+              outline: outline,
+            ),
+          ),
+        );
       } else {
         setState(() {
-          _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? 'Request failed'}\n${res.body}';
-          _loading = false;
+          _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? 'Request failed'}';
         });
       }
     } catch (e) {
       setState(() {
         _status = 'Network error: $e';
-        _loading = false;
       });
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        if (_hasResults) {
-          _resetToStart();
-          return false;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Turn your notes into a study system fast',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.black12),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4)),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ElevatedButton(
+                          onPressed: _loading ? null : _pickAndPreview,
+                          child: Text(_loading ? 'Working…' : 'Upload Study Notes'),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Supports PDF, DOCX, TXT, Images',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.black54),
+                        ),
+                        if (_status.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black87)),
+                        ]
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PreviewScreen extends StatefulWidget {
+  final List<PlatformFile> originalFiles;
+  final List<Map<String, dynamic>> flashcards;
+  final String outline;
+  const PreviewScreen({super.key, required this.originalFiles, required this.flashcards, required this.outline});
+
+  @override
+  State<PreviewScreen> createState() => _PreviewScreenState();
+}
+
+enum PreviewTab { flashcards, outline }
+
+class _PreviewScreenState extends State<PreviewScreen> {
+  PreviewTab _tab = PreviewTab.flashcards;
+  late List<bool> _selected;
+  final Set<int> _showBack = {};
+  bool _downloading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = List<bool>.filled(widget.flashcards.length, true);
+  }
+
+  Future<void> _downloadStudyPack() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
+      for (final f in widget.originalFiles) {
+        if (f.bytes != null) {
+          req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
+        } else if (f.path != null) {
+          req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
         }
-        return true;
-      },
-      child: Scaffold(
-        body: SafeArea(
-          child: Stack(
+      }
+      final streamed = await req.send();
+      final res = await http.Response.fromStream(streamed);
+      if (res.statusCode == 200) {
+        final bytes = res.bodyBytes;
+        // Share sheet so user can send to Drive/Gmail/etc.
+        // Avoid writing to disk; share from memory.
+        // ignore: deprecated_member_use
+        // Using XFile from share_plus
+        await Share.shareXFiles([
+          XFile.fromData(bytes, name: 'study_pack.zip', mimeType: 'application/zip'),
+        ], text: 'Your study pack is ready!');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Study Pack ready')));
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Download failed: ${res.statusCode} ${res.reasonPhrase ?? ''}')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Network error: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  void _goStudy() {
+    final kept = <Map<String, dynamic>>[];
+    for (var i = 0; i < widget.flashcards.length; i++) {
+      if (_selected[i]) kept.add(widget.flashcards[i]);
+    }
+    if (kept.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select at least one card')));
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => StudyScreen(cards: kept)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SingleChildScrollView(
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 480),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: () => setState(() => _tab = PreviewTab.flashcards),
+                    child: const Text('Flashcards'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => setState(() => _tab = PreviewTab.outline),
+                    child: const Text('Outline'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _downloading ? null : _downloadStudyPack,
+                    child: Text(_downloading ? 'Preparing…' : 'Download Study Pack'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _goStudy,
+                    child: const Text('Study!'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _tab == PreviewTab.flashcards
+                    ? _FlashcardList(
+                        cards: widget.flashcards,
+                        selected: _selected,
+                        showBack: _showBack,
+                        onToggleSelected: (i, v) => setState(() => _selected[i] = v),
+                      )
+                    : _OutlineView(text: widget.outline),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FlashcardList extends StatelessWidget {
+  final List<Map<String, dynamic>> cards;
+  final List<bool> selected;
+  final Set<int> showBack;
+  final void Function(int index, bool value) onToggleSelected;
+  const _FlashcardList({required this.cards, required this.selected, required this.showBack, required this.onToggleSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: cards.length,
+      itemBuilder: (context, i) {
+        final c = cards[i];
+        final front = (c['front'] ?? '').toString();
+        final back = (c['back'] ?? '').toString();
+        final isBack = showBack.contains(i);
+        return StatefulBuilder(
+          builder: (context, setState) => Container(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.black12),
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => setState(() {
+                if (isBack) {
+                  showBack.remove(i);
+                } else {
+                  showBack.add(i);
+                }
+              }),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'The future of learning — fast, efficient, AI-powered.',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontStyle: FontStyle.italic,
-                                ),
-                          ),
-                          const SizedBox(height: 24),
                           Container(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.black12),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Colors.black26,
-                                  blurRadius: 10,
-                                  offset: Offset(0, 4),
-                                ),
-                              ],
+                              color: isBack ? Colors.green.shade600 : Colors.blueGrey.shade700,
+                              borderRadius: BorderRadius.circular(6),
                             ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const DefaultTextStyle(
-                                  style: TextStyle(color: Colors.black),
-                                  child: SizedBox.shrink(),
-                                ),
-                                Text(
-                                  _status,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 14,
-                                    height: 1.3,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                ElevatedButton(
-                                  onPressed: _loading ? null : _pickUploadGenerate,
-                                  child: Text(_loading ? 'Working…' : 'Choose files & Generate'),
-                                ),
-                              ],
-                            ),
+                            child: Text(isBack ? 'Answer' : 'Question', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
                           ),
-                          if (_flashcards.isNotEmpty) ...[
-                            const SizedBox(height: 20),
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: Colors.black12),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Colors.black26,
-                                    blurRadius: 10,
-                                    offset: Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  const Text(
-                                    'Flashcards',
-                                    style: TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  FlashcardSwiper(cards: _flashcards),
-                                  const SizedBox(height: 12),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton.icon(
-                                      onPressed: _resetToStart,
-                                      icon: const Icon(Icons.restart_alt),
-                                      label: const Text('Back to start'),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          if (_outline != null && _outline!.trim().isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            TextButton(
-                              onPressed: () {
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.white,
-                                  shape: const RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                                  ),
-                                  builder: (_) {
-                                    return DraggableScrollableSheet(
-                                      initialChildSize: 0.8,
-                                      expand: false,
-                                      builder: (context, controller) {
-                                        return Padding(
-                                          padding: const EdgeInsets.all(16),
-                                          child: ListView(
-                                            controller: controller,
-                                            children: [
-                                              const Text('Outline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black)),
-                                              const SizedBox(height: 12),
-                                              Text(_outline!, style: const TextStyle(color: Colors.black87)),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    );
-                                  },
-                                );
-                              },
-                              child: const Text('View Outline'),
-                            ),
-                          ],
+                          const SizedBox(height: 8),
+                          Text(isBack ? back : front, style: const TextStyle(color: Colors.black87)),
                         ],
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Checkbox(
+                      value: selected[i],
+                      onChanged: (v) => onToggleSelected(i, v ?? true),
+                    ),
+                  ],
                 ),
               ),
-              if (_hasResults)
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: IconButton(
-                      tooltip: 'Back',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.all(8),
-                      ),
-                      icon: const Icon(Icons.arrow_back, color: Colors.black87),
-                      onPressed: _resetToStart,
-                    ),
-                  ),
-                ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _OutlineView extends StatelessWidget {
+  final String text;
+  const _OutlineView({required this.text});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.black12),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: SingleChildScrollView(
+          child: Text(text, style: const TextStyle(color: Colors.black87, height: 1.3)),
+        ),
+      ),
+    );
+  }
+}
+
+class StudyScreen extends StatelessWidget {
+  final List<Map<String, dynamic>> cards;
+  const StudyScreen({super.key, required this.cards});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Study', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              Expanded(child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad'])),
             ],
           ),
         ),
@@ -337,7 +456,8 @@ class _FrontPageState extends State<FrontPage> {
 
 class FlashcardSwiper extends StatefulWidget {
   final List<Map<String, dynamic>> cards;
-  const FlashcardSwiper({super.key, required this.cards});
+  final List<String> labels;
+  const FlashcardSwiper({super.key, required this.cards, this.labels = const ['I know it!', 'Maybe know it...', 'I dunno']});
 
   @override
   State<FlashcardSwiper> createState() => _FlashcardSwiperState();
@@ -524,7 +644,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
               child: ElevatedButton.icon(
                 onPressed: () => _rate(Knowledge.know),
                 icon: const Icon(Icons.check),
-                label: const Text('I know it!'),
+                label: Text(widget.labels[0]),
               ),
             ),
             const SizedBox(width: 8),
@@ -532,7 +652,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
               child: ElevatedButton.icon(
                 onPressed: () => _rate(Knowledge.maybe),
                 icon: const Icon(Icons.help_outline),
-                label: const Text('Maybe know it...'),
+                label: Text(widget.labels[1]),
               ),
             ),
             const SizedBox(width: 8),
@@ -540,7 +660,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
               child: ElevatedButton.icon(
                 onPressed: () => _rate(Knowledge.dunno),
                 icon: const Icon(Icons.close),
-                label: const Text('I dunno'),
+                label: Text(widget.labels[2]),
               ),
             ),
           ],
