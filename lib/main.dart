@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(const SpacedApp());
 
@@ -123,6 +124,14 @@ class _HomePageState extends State<HomePage> {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
         final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         final outline = (body['outline'] ?? '').toString();
+        // Save session locally
+        final session = StudySession(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          createdAt: DateTime.now(),
+          flashcards: cards,
+          outline: outline,
+        );
+        await StudyStorage.saveSession(session);
         if (!mounted) return;
         Navigator.of(context).push(
           MaterialPageRoute(
@@ -190,6 +199,13 @@ class _HomePageState extends State<HomePage> {
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.black54),
                         ),
+                        const SizedBox(height: 12),
+                        OutlinedButton(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => const LibraryScreen()),
+                          ),
+                          child: const Text('Previous Study Packs'),
+                        ),
                         if (_status.isNotEmpty) ...[
                           const SizedBox(height: 12),
                           Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black87)),
@@ -208,10 +224,10 @@ class _HomePageState extends State<HomePage> {
 }
 
 class PreviewScreen extends StatefulWidget {
-  final List<PlatformFile> originalFiles;
+  final List<PlatformFile>? originalFiles;
   final List<Map<String, dynamic>> flashcards;
   final String outline;
-  const PreviewScreen({super.key, required this.originalFiles, required this.flashcards, required this.outline});
+  const PreviewScreen({super.key, this.originalFiles, required this.flashcards, required this.outline});
 
   @override
   State<PreviewScreen> createState() => _PreviewScreenState();
@@ -235,8 +251,9 @@ class _PreviewScreenState extends State<PreviewScreen> {
     if (_downloading) return;
     setState(() => _downloading = true);
     try {
-      final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
-      for (final f in widget.originalFiles) {
+  final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
+  final files = widget.originalFiles ?? const <PlatformFile>[];
+  for (final f in files) {
         if (f.bytes != null) {
           req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
         } else if (f.path != null) {
@@ -304,6 +321,8 @@ class _PreviewScreenState extends State<PreviewScreen> {
                     icon: const Icon(Icons.arrow_back, color: Colors.black87),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
+                  const SizedBox(width: 8),
+                  const Text('Preview', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
                 ],
               ),
               const SizedBox(height: 4),
@@ -320,7 +339,9 @@ class _PreviewScreenState extends State<PreviewScreen> {
                     child: const Text('Outline'),
                   ),
                   ElevatedButton(
-                    onPressed: _downloading ? null : _downloadStudyPack,
+                    onPressed: _downloading || (widget.originalFiles == null || widget.originalFiles!.isEmpty)
+                        ? null
+                        : _downloadStudyPack,
                     child: Text(_downloading ? 'Preparing…' : 'Download Study Pack'),
                   ),
                   ElevatedButton(
@@ -462,12 +483,186 @@ class StudyScreen extends StatelessWidget {
                     icon: const Icon(Icons.arrow_back, color: Colors.black87),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
+                  const SizedBox(width: 8),
+                  const Text('Study', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad'])),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------- Local Storage ----------------------
+class StudySession {
+  final String id;
+  final DateTime createdAt;
+  final List<Map<String, dynamic>> flashcards;
+  final String outline;
+
+  StudySession({required this.id, required this.createdAt, required this.flashcards, required this.outline});
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'createdAt': createdAt.toIso8601String(),
+        'flashcards': flashcards,
+        'outline': outline,
+      };
+
+  static StudySession? fromJson(Map<String, dynamic> j) {
+    try {
+      return StudySession(
+        id: j['id'] as String,
+        createdAt: DateTime.parse(j['createdAt'] as String),
+        flashcards: (j['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? <Map<String, dynamic>>[],
+        outline: (j['outline'] ?? '').toString(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class StudyStorage {
+  static const String _indexKey = 'sessions_index_v1';
+
+  static Future<List<String>> _getIndex(SharedPreferences prefs) async {
+    final list = prefs.getStringList(_indexKey) ?? <String>[];
+    return list;
+  }
+
+  static Future<void> _setIndex(SharedPreferences prefs, List<String> ids) async {
+    await prefs.setStringList(_indexKey, ids);
+  }
+
+  static Future<void> saveSession(StudySession s) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = await _getIndex(prefs);
+    if (!ids.contains(s.id)) ids.insert(0, s.id);
+    await _setIndex(prefs, ids);
+    await prefs.setString('session_${s.id}', jsonEncode(s.toJson()));
+  }
+
+  static Future<List<StudySession>> loadAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = await _getIndex(prefs);
+    final out = <StudySession>[];
+    for (final id in ids) {
+      final raw = prefs.getString('session_$id');
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        final s = StudySession.fromJson(map);
+        if (s != null) out.add(s);
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  static Future<void> deleteSession(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = await _getIndex(prefs);
+    ids.remove(id);
+    await _setIndex(prefs, ids);
+    await prefs.remove('session_$id');
+  }
+}
+
+class LibraryScreen extends StatefulWidget {
+  const LibraryScreen({super.key});
+  @override
+  State<LibraryScreen> createState() => _LibraryScreenState();
+}
+
+class _LibraryScreenState extends State<LibraryScreen> {
+  late Future<List<StudySession>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = StudyStorage.loadAll();
+  }
+
+  void _refresh() => setState(() => _future = StudyStorage.loadAll());
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Back',
+                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
+                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text('Previous Study Packs', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
                 ],
               ),
               const SizedBox(height: 8),
-              const Text('Study', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 12),
-              Expanded(child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad'])),
+              Expanded(
+                child: FutureBuilder<List<StudySession>>(
+                  future: _future,
+                  builder: (context, snap) {
+                    if (snap.connectionState != ConnectionState.done) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final items = snap.data ?? const <StudySession>[];
+                    if (items.isEmpty) {
+                      return const Center(child: Text('No saved study packs', style: TextStyle(color: Colors.white70)));
+                    }
+                    return ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, i) {
+                        final s = items[i];
+                        return Dismissible(
+                          key: Key(s.id),
+                          background: Container(color: Colors.redAccent),
+                          onDismissed: (_) async {
+                            await StudyStorage.deleteSession(s.id);
+                            _refresh();
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.black12),
+                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+                            ),
+                            child: ListTile(
+                              title: Text('Study Pack — ${s.createdAt.toLocal()}'),
+                              subtitle: Text('${s.flashcards.length} cards', maxLines: 1, overflow: TextOverflow.ellipsis),
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => PreviewScreen(
+                                      originalFiles: const [],
+                                      flashcards: s.flashcards,
+                                      outline: s.outline,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
             ],
           ),
         ),
