@@ -90,7 +90,15 @@ class _FrontPageState extends State<FrontPage> {
   List<Map<String, dynamic>> _flashcards = const [];
   String? _outline;
 
-  Color get _statusColor => Colors.black;
+  bool get _hasResults => _flashcards.isNotEmpty || (_outline != null && _outline!.trim().isNotEmpty);
+
+  void _resetToStart() {
+    setState(() {
+      _flashcards = const [];
+      _outline = null;
+      _status = 'Pick files and generate flashcards.';
+    });
+  }
 
   Future<void> _pickUploadGenerate() async {
     setState(() {
@@ -132,151 +140,194 @@ class _FrontPageState extends State<FrontPage> {
           _flashcards = cards;
           _outline = outline;
           _status = 'Generated ${cards.length} flashcards.';
+          _loading = false;
         });
       } else {
         setState(() {
           _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? 'Request failed'}\n${res.body}';
+          _loading = false;
         });
       }
     } catch (e) {
-      setState(() => _status = 'Network error: $e');
-    } finally {
-      setState(() => _loading = false);
+      setState(() {
+        _status = 'Network error: $e';
+        _loading = false;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'The future of learning — fast, efficient, AI-powered.',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontStyle: FontStyle.italic,
-                          ),
-                    ),
-                    const SizedBox(height: 24),
-                    Container(
+    return WillPopScope(
+      onWillPop: () async {
+        if (_hasResults) {
+          _resetToStart();
+          return false;
+        }
+        return true;
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Stack(
+            children: [
+              SingleChildScrollView(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: Padding(
                       padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.black12),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black26,
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          DefaultTextStyle(
-                            style: const TextStyle(color: Colors.black),
-                            child: Text(
-                              _status,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: _statusColor,
-                                fontSize: 14,
-                                height: 1.3,
-                              ),
+                          Text(
+                            'The future of learning — fast, efficient, AI-powered.',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                          ),
+                          const SizedBox(height: 24),
+                          Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.black12),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 10,
+                                  offset: Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const DefaultTextStyle(
+                                  style: TextStyle(color: Colors.black),
+                                  child: SizedBox.shrink(),
+                                ),
+                                Text(
+                                  _status,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 14,
+                                    height: 1.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                ElevatedButton(
+                                  onPressed: _loading ? null : _pickUploadGenerate,
+                                  child: Text(_loading ? 'Working…' : 'Choose files & Generate'),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 16),
-                          ElevatedButton(
-                            onPressed: _loading ? null : _pickUploadGenerate,
-                            child: Text(_loading ? 'Working…' : 'Choose files & Generate'),
-                          ),
+                          if (_flashcards.isNotEmpty) ...[
+                            const SizedBox(height: 20),
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.black12),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 10,
+                                    offset: Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  const Text(
+                                    'Flashcards',
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  FlashcardSwiper(cards: _flashcards),
+                                  const SizedBox(height: 12),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton.icon(
+                                      onPressed: _resetToStart,
+                                      icon: const Icon(Icons.restart_alt),
+                                      label: const Text('Back to start'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          if (_outline != null && _outline!.trim().isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            TextButton(
+                              onPressed: () {
+                                showModalBottomSheet(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.white,
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                                  ),
+                                  builder: (_) {
+                                    return DraggableScrollableSheet(
+                                      initialChildSize: 0.8,
+                                      expand: false,
+                                      builder: (context, controller) {
+                                        return Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: ListView(
+                                            controller: controller,
+                                            children: [
+                                              const Text('Outline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black)),
+                                              const SizedBox(height: 12),
+                                              Text(_outline!, style: const TextStyle(color: Colors.black87)),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                );
+                              },
+                              child: const Text('View Outline'),
+                            ),
+                          ],
                         ],
                       ),
                     ),
-                    if (_flashcards.isNotEmpty) ...[
-                      const SizedBox(height: 20),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.black12),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black26,
-                              blurRadius: 10,
-                              offset: Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const Text(
-                              'Flashcards',
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            FlashcardSwiper(cards: _flashcards),
-                          ],
-                        ),
-                      ),
-                    ],
-                    if (_outline != null && _outline!.trim().isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      TextButton(
-                        onPressed: () {
-                          showModalBottomSheet(
-                            context: context,
-                            isScrollControlled: true,
-                            backgroundColor: Colors.white,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                            ),
-                            builder: (_) {
-                              return DraggableScrollableSheet(
-                                initialChildSize: 0.8,
-                                expand: false,
-                                builder: (context, controller) {
-                                  return Padding(
-                                    padding: const EdgeInsets.all(16),
-                                    child: ListView(
-                                      controller: controller,
-                                      children: [
-                                        const Text('Outline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black)),
-                                        const SizedBox(height: 12),
-                                        Text(_outline!, style: const TextStyle(color: Colors.black87)),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              );
-                            },
-                          );
-                        },
-                        child: const Text('View Outline'),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
-            ),
+              if (_hasResults)
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: IconButton(
+                      tooltip: 'Back',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        padding: const EdgeInsets.all(8),
+                      ),
+                      icon: const Icon(Icons.arrow_back, color: Colors.black87),
+                      onPressed: _resetToStart,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
