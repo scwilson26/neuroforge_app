@@ -296,6 +296,17 @@ class _PreviewScreenState extends State<PreviewScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Back',
+                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
+                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -443,6 +454,17 @@ class StudyScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Back',
+                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
+                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
               const Text('Study', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 12),
               Expanded(child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad'])),
