@@ -15,69 +15,114 @@ void main() => runApp(const SpacedApp());
 class SpacedApp extends StatelessWidget {
   const SpacedApp({super.key});
 
-  static const Color tealBg = Color(0xFF0097A7);
-  static const Color white = Colors.white;
-  static const Color black = Colors.black;
+  static const Color seed = Color(0xFF0097A7);
 
   @override
   Widget build(BuildContext context) {
+    final baseText = GoogleFonts.poppinsTextTheme();
+    TextTheme textTheme = baseText.copyWith(
+      // Title (screen title)
+      headlineSmall: baseText.headlineSmall?.copyWith(fontSize: 22, fontWeight: FontWeight.w600),
+      // Body
+      bodyMedium: baseText.bodyMedium?.copyWith(fontSize: 14, fontWeight: FontWeight.w400),
+      // Caption
+      bodySmall: baseText.bodySmall?.copyWith(fontSize: 12, fontWeight: FontWeight.w400),
+    );
+    final lightScheme = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light);
+    final darkScheme = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
+
     return MaterialApp(
       title: 'Spaced – Study Pack',
+      themeMode: ThemeMode.system,
       theme: ThemeData(
-        scaffoldBackgroundColor: tealBg,
-        textTheme: GoogleFonts.poppinsTextTheme().apply(
-          bodyColor: white,
-          displayColor: white,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: tealBg,
-          foregroundColor: Colors.white,
+        useMaterial3: true,
+        colorScheme: lightScheme,
+        scaffoldBackgroundColor: lightScheme.background,
+        textTheme: textTheme,
+        appBarTheme: AppBarTheme(
+          backgroundColor: lightScheme.surface,
+          foregroundColor: lightScheme.onSurface,
           elevation: 0,
           centerTitle: true,
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
-            backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-              if (states.contains(WidgetState.disabled)) return Colors.black54;
-              return black;
-            }),
-            foregroundColor: WidgetStateProperty.all<Color>(white),
-            overlayColor: WidgetStateProperty.all<Color>(Colors.white12),
-            shape: WidgetStateProperty.all(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            padding: WidgetStateProperty.all(
-              const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            ),
+            minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(
-            side: WidgetStateProperty.resolveWith<BorderSide>((states) {
-              final color = states.contains(WidgetState.disabled) ? Colors.black26 : black;
-              return BorderSide(color: color, width: 1.5);
-            }),
-            backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-              if (states.contains(WidgetState.disabled)) return Colors.white70;
-              return white;
-            }),
-            foregroundColor: WidgetStateProperty.all<Color>(black),
-            overlayColor: WidgetStateProperty.all<Color>(Colors.black12),
-            shape: WidgetStateProperty.all(
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            padding: WidgetStateProperty.all(
-              const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            ),
+            minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
           ),
         ),
-        snackBarTheme: const SnackBarThemeData(
-          backgroundColor: black,
-          contentTextStyle: TextStyle(color: white),
+        textButtonTheme: TextButtonThemeData(
+          style: ButtonStyle(
+            minimumSize: const WidgetStatePropertyAll(Size(88, 52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
+          ),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: lightScheme.inverseSurface,
+          contentTextStyle: TextStyle(color: lightScheme.onInverseSurface),
           behavior: SnackBarBehavior.floating,
         ),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: InputBorder.none,
+          isDense: false,
+          contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        ),
+        dividerTheme: DividerThemeData(color: lightScheme.outlineVariant, space: 1, thickness: 1),
       ),
-  home: const HomePage(),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: darkScheme,
+        scaffoldBackgroundColor: darkScheme.background,
+        textTheme: textTheme,
+        appBarTheme: AppBarTheme(
+          backgroundColor: darkScheme.surface,
+          foregroundColor: darkScheme.onSurface,
+          elevation: 0,
+          centerTitle: true,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ButtonStyle(
+            minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: ButtonStyle(
+            minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: ButtonStyle(
+            minimumSize: const WidgetStatePropertyAll(Size(88, 52)),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 16, horizontal: 16)),
+          ),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: darkScheme.inverseSurface,
+          contentTextStyle: TextStyle(color: darkScheme.onInverseSurface),
+          behavior: SnackBarBehavior.floating,
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: InputBorder.none,
+          isDense: false,
+          contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        ),
+        dividerTheme: DividerThemeData(color: darkScheme.outlineVariant, space: 1, thickness: 1),
+      ),
+      home: const HomePage(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -227,21 +272,21 @@ class _HomePageState extends State<HomePage> {
                         textAlign: TextAlign.center,
                         style: textTheme.bodySmall?.copyWith(color: textTheme.bodySmall?.color?.withOpacity(0.7)),
                       ),
-                      const SizedBox(height: 24),
+            const SizedBox(height: 24),
                       Semantics(
                         button: true,
                         label: 'Upload notes',
                         child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
                           onPressed: _loading ? null : _pickAndPreview,
                           child: const Text('Upload notes'),
                         ),
                       ),
-                      const SizedBox(height: 16),
+            const SizedBox(height: 16),
                       Align(
                         alignment: Alignment.center,
                         child: TextButton(
-                          style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
+              style: TextButton.styleFrom(minimumSize: const Size(88, 52)),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(builder: (_) => const LibraryScreen()),
                           ),
@@ -262,14 +307,13 @@ class _HomePageState extends State<HomePage> {
                 child: Stack(
                   children: [
                     // Modal barrier
-                    ModalBarrier(color: theme.colorScheme.surface.withOpacity(0.6), dismissible: false),
+                    ModalBarrier(color: theme.colorScheme.scrim.withOpacity(0.6), dismissible: false),
                     Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 360),
-                        child: Material(
-                          elevation: 8,
-                          borderRadius: BorderRadius.circular(12),
-                          color: theme.colorScheme.surface,
+                        child: Card(
+                          elevation: 0,
+                          clipBehavior: Clip.antiAlias,
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Column(
@@ -281,7 +325,7 @@ class _HomePageState extends State<HomePage> {
                                     SizedBox(
                                       width: 24,
                                       height: 24,
-                                      child: CircularProgressIndicator(color: theme.colorScheme.primary, strokeWidth: 3),
+                                      child: CircularProgressIndicator(strokeWidth: 3),
                                     ),
                                     const SizedBox(width: 12),
                                     Text(_stages[_progressStage], style: textTheme.bodyMedium),
@@ -292,7 +336,7 @@ class _HomePageState extends State<HomePage> {
                                   children: [
                                     Expanded(
                                       child: TextButton(
-                                        style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
+                                        style: TextButton.styleFrom(minimumSize: const Size(88, 52)),
                                         onPressed: () {
                                           _cancelled = true;
                                           _client?.close();
@@ -438,8 +482,8 @@ class _PreviewScreenState extends State<PreviewScreen> {
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    return Scaffold(
-      appBar: AppBar(
+  return Scaffold(
+    appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
@@ -471,7 +515,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: SegmentedButton<PreviewTab>(
               segments: const [
                 ButtonSegment(value: PreviewTab.flashcards, label: Text('Flashcards'), icon: Icon(Icons.style_outlined)),
@@ -480,11 +524,11 @@ class _PreviewScreenState extends State<PreviewScreen> {
               selected: {_tab},
               onSelectionChanged: (s) => _setTab(s.first),
               style: ButtonStyle(
-                foregroundColor: WidgetStatePropertyAll(primary),
+        foregroundColor: WidgetStatePropertyAll(primary),
               ),
             ),
           ),
-          const SizedBox(height: 8),
+      const SizedBox(height: 8),
           Expanded(
             child: _tab == PreviewTab.flashcards
                 ? _buildCardList()
@@ -494,7 +538,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
       ),
       bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Row(
             children: [
               Expanded(
@@ -505,7 +549,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
                   child: Text(_downloading ? 'Preparing…' : 'Download study pack'),
                 ),
               ),
-              const SizedBox(width: 12),
+        const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton(
                   onPressed: _selectedCount == 0 ? null : _goStudy,
@@ -528,7 +572,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
         onTap: () => Navigator.of(context).pop(),
       );
     }
-    return ListView.separated(
+  return ListView.separated(
       itemCount: cards.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, i) {
@@ -536,7 +580,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
         final front = (c['front'] ?? '').toString();
         return StatefulBuilder(
           builder: (context, setLocal) => ListTile(
-            title: Text(front, style: const TextStyle(fontWeight: FontWeight.w600)),
+      title: Text(front, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
             trailing: Checkbox(
               value: _selected[i],
               onChanged: (v) {
@@ -550,7 +594,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
               setLocal(() {});
               setState(() => _selected[i] = nv);
             },
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             visualDensity: VisualDensity.compact,
           ),
         );
@@ -569,7 +613,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
     }
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: SingleChildScrollView(child: Text(text)),
+      child: SingleChildScrollView(child: Text(text, style: Theme.of(context).textTheme.bodyMedium)),
     );
   }
 }
@@ -601,28 +645,18 @@ class StudyScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+        ),
+        title: const Text('Study'),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Back',
-                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
-                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text('Study', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Expanded(child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad'])),
-            ],
-          ),
+          child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad']),
         ),
       ),
     );
@@ -904,16 +938,16 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: _showBack ? Colors.green.shade600 : Colors.blueGrey.shade700,
+                color: Theme.of(context).colorScheme.primary,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
-                              _showBack ? 'Answer' : 'Question',
-                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                _showBack ? 'Answer' : 'Question',
+                style: TextStyle(color: Theme.of(context).colorScheme.onPrimary, fontSize: 12, fontWeight: FontWeight.w600),
                             ),
                           ),
                           const Spacer(),
-                          Icon(_showBack ? Icons.flip_to_front : Icons.flip, color: Colors.black45, size: 18),
+              Icon(_showBack ? Icons.flip_to_front : Icons.flip, size: 18),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -947,7 +981,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
                             key: ValueKey(_showBack),
                             child: Text(
                               _showBack ? back : front,
-                              style: const TextStyle(color: Colors.black87, height: 1.3),
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.3),
                             ),
                           ),
                         ),
@@ -968,7 +1002,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
               onPressed: _index > 0
                   ? () => _controller.previousPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
                   : null,
-              icon: const Icon(Icons.chevron_left, color: Colors.black87),
+              icon: const Icon(Icons.chevron_left),
             ),
             const SizedBox(width: 8),
             IconButton(
@@ -976,7 +1010,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
               onPressed: _index < widget.cards.length - 1
                   ? () => _controller.nextPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
                   : null,
-              icon: const Icon(Icons.chevron_right, color: Colors.black87),
+              icon: const Icon(Icons.chevron_right),
             ),
           ],
         ),
@@ -984,7 +1018,7 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
         Text(
           'Known: ${_knownCount} · Maybe: ${_maybeCount} · Dunno: ${_dunnoCount}',
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
         Row(
