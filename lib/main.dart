@@ -7,6 +7,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_saver/file_saver.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart';
 
 void main() => runApp(const SpacedApp());
 
@@ -332,7 +334,6 @@ enum PreviewTab { flashcards, outline }
 class _PreviewScreenState extends State<PreviewScreen> {
   PreviewTab _tab = PreviewTab.flashcards;
   late List<bool> _selected;
-  final Set<int> _showBack = {};
   bool _downloading = false;
 
   @override
@@ -416,62 +417,100 @@ class _PreviewScreenState extends State<PreviewScreen> {
     );
   }
 
+  int get _selectedCount => _selected.where((e) => e).length;
+
+  void _setTab(PreviewTab t) {
+    setState(() => _tab = t);
+    // Accessibility: Announce tab change
+    final label = t == PreviewTab.flashcards ? 'Flashcards' : 'Outline';
+    SemanticsService.announce(label, TextDirection.ltr);
+  }
+
+  void _bulkSelect(bool value) {
+    HapticFeedback.lightImpact();
+    setState(() {
+      for (var i = 0; i < _selected.length; i++) {
+        _selected[i] = value;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return Scaffold(
-      body: SafeArea(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Preview'),
+            if (_selectedCount > 0)
+              Text('${_selectedCount} selected',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.75))),
+          ],
+        ),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'all') _bulkSelect(true);
+              if (v == 'none') _bulkSelect(false);
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'all', child: Text('Select all')),
+              PopupMenuItem(value: 'none', child: Text('Deselect all')),
+            ],
+          ),
+        ],
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SegmentedButton<PreviewTab>(
+              segments: const [
+                ButtonSegment(value: PreviewTab.flashcards, label: Text('Flashcards'), icon: Icon(Icons.style_outlined)),
+                ButtonSegment(value: PreviewTab.outline, label: Text('Outline'), icon: Icon(Icons.article_outlined)),
+              ],
+              selected: {_tab},
+              onSelectionChanged: (s) => _setTab(s.first),
+              style: ButtonStyle(
+                foregroundColor: WidgetStatePropertyAll(primary),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _tab == PreviewTab.flashcards
+                ? _buildCardList()
+                : _buildOutlineView(),
+          ),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Row(
             children: [
-              Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Back',
-                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
-                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text('Preview', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton(
-                    onPressed: () => setState(() => _tab = PreviewTab.flashcards),
-                    child: const Text('Flashcards'),
-                  ),
-                  OutlinedButton(
-                    onPressed: () => setState(() => _tab = PreviewTab.outline),
-                    child: const Text('Outline'),
-                  ),
-                  ElevatedButton(
-                    onPressed: _downloading || (widget.originalFiles == null || widget.originalFiles!.isEmpty)
-                        ? null
-                        : _downloadStudyPack,
-                    child: Text(_downloading ? 'Preparing…' : 'Download Study Pack'),
-                  ),
-                  ElevatedButton(
-                    onPressed: _goStudy,
-                    child: const Text('Study!'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
               Expanded(
-                child: _tab == PreviewTab.flashcards
-                    ? _FlashcardList(
-                        cards: widget.flashcards,
-                        selected: _selected,
-                        showBack: _showBack,
-                        onToggleSelected: (i, v) => setState(() => _selected[i] = v),
-                      )
-                    : _OutlineView(text: widget.outline),
+                child: ElevatedButton(
+                  onPressed: _downloading || (widget.originalFiles == null || widget.originalFiles!.isEmpty)
+                      ? null
+                      : _downloadStudyPack,
+                  child: Text(_downloading ? 'Preparing…' : 'Download study pack'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _selectedCount == 0 ? null : _goStudy,
+                  child: const Text('Study now'),
+                ),
               ),
             ],
           ),
@@ -479,97 +518,78 @@ class _PreviewScreenState extends State<PreviewScreen> {
       ),
     );
   }
-}
 
-class _FlashcardList extends StatelessWidget {
-  final List<Map<String, dynamic>> cards;
-  final List<bool> selected;
-  final Set<int> showBack;
-  final void Function(int index, bool value) onToggleSelected;
-  const _FlashcardList({required this.cards, required this.selected, required this.showBack, required this.onToggleSelected});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
+  Widget _buildCardList() {
+    final cards = widget.flashcards;
+    if (cards.isEmpty) {
+      return _EmptyState(
+        message: 'No flashcards found',
+        actionText: 'Retry upload',
+        onTap: () => Navigator.of(context).pop(),
+      );
+    }
+    return ListView.separated(
       itemCount: cards.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final c = cards[i];
         final front = (c['front'] ?? '').toString();
-        final back = (c['back'] ?? '').toString();
-        final isBack = showBack.contains(i);
         return StatefulBuilder(
-          builder: (context, setState) => Container(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black12),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
+          builder: (context, setLocal) => ListTile(
+            title: Text(front, style: const TextStyle(fontWeight: FontWeight.w600)),
+            trailing: Checkbox(
+              value: _selected[i],
+              onChanged: (v) {
+                final nv = v ?? true;
+                setLocal(() {});
+                setState(() => _selected[i] = nv);
+              },
             ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => setState(() {
-                if (isBack) {
-                  showBack.remove(i);
-                } else {
-                  showBack.add(i);
-                }
-              }),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: isBack ? Colors.green.shade600 : Colors.blueGrey.shade700,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(isBack ? 'Answer' : 'Question', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(isBack ? back : front, style: const TextStyle(color: Colors.black87)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Checkbox(
-                      value: selected[i],
-                      onChanged: (v) => onToggleSelected(i, v ?? true),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            onTap: () {
+              final nv = !_selected[i];
+              setLocal(() {});
+              setState(() => _selected[i] = nv);
+            },
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            visualDensity: VisualDensity.compact,
           ),
         );
       },
     );
   }
+
+  Widget _buildOutlineView() {
+    final text = widget.outline.trim();
+    if (text.isEmpty) {
+      return _EmptyState(
+        message: 'No outline yet',
+        actionText: 'Retry upload',
+        onTap: () => Navigator.of(context).pop(),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: SingleChildScrollView(child: Text(text)),
+    );
+  }
 }
 
-class _OutlineView extends StatelessWidget {
-  final String text;
-  const _OutlineView({required this.text});
+class _EmptyState extends StatelessWidget {
+  final String message;
+  final String actionText;
+  final VoidCallback onTap;
+  const _EmptyState({required this.message, required this.actionText, required this.onTap});
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.black12),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: SingleChildScrollView(
-          child: Text(text, style: const TextStyle(color: Colors.black87, height: 1.3)),
-        ),
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(message),
+          const SizedBox(height: 8),
+          OutlinedButton(onPressed: onTap, child: Text(actionText)),
+        ],
       ),
     );
   }
