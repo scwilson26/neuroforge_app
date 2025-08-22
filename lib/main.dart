@@ -12,6 +12,39 @@ import 'package:flutter/semantics.dart';
 
 void main() => runApp(const SpacedApp());
 
+String _formatDateTime(DateTime dt) {
+  final d = dt.toLocal();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+}
+
+// Global app activity flags used to guard destructive actions
+class AppActivity {
+  static final ValueNotifier<bool> isGenerating = ValueNotifier<bool>(false);
+  static final ValueNotifier<bool> isExporting = ValueNotifier<bool>(false);
+  static final ValueNotifier<String?> openPackId = ValueNotifier<String?>(null);
+}
+
+Route<T> _fadeSlide<T>(Widget page, BuildContext context, {int ms = 180}) {
+  final disable = MediaQuery.of(context).disableAnimations;
+  final duration = Duration(milliseconds: disable ? 0 : ms);
+  return PageRouteBuilder<T>(
+    transitionDuration: duration,
+    reverseTransitionDuration: duration,
+    pageBuilder: (context, animation, secondaryAnimation) => page,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOut);
+      return FadeTransition(
+        opacity: curved,
+        child: SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
 class SpacedApp extends StatelessWidget {
   const SpacedApp({super.key});
 
@@ -19,7 +52,7 @@ class SpacedApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final baseText = GoogleFonts.poppinsTextTheme();
+  final baseText = GoogleFonts.poppinsTextTheme();
     TextTheme textTheme = baseText.copyWith(
       // Title (screen title)
       headlineSmall: baseText.headlineSmall?.copyWith(fontSize: 22, fontWeight: FontWeight.w600),
@@ -39,6 +72,12 @@ class SpacedApp extends StatelessWidget {
         colorScheme: lightScheme,
         scaffoldBackgroundColor: lightScheme.background,
         textTheme: textTheme,
+        iconButtonTheme: IconButtonThemeData(
+          style: IconButton.styleFrom(
+            minimumSize: const Size(44, 44),
+            padding: const EdgeInsets.all(8),
+          ),
+        ),
         appBarTheme: AppBarTheme(
           backgroundColor: lightScheme.surface,
           foregroundColor: lightScheme.onSurface,
@@ -83,6 +122,12 @@ class SpacedApp extends StatelessWidget {
         colorScheme: darkScheme,
         scaffoldBackgroundColor: darkScheme.background,
         textTheme: textTheme,
+        iconButtonTheme: IconButtonThemeData(
+          style: IconButton.styleFrom(
+            minimumSize: const Size(44, 44),
+            padding: const EdgeInsets.all(8),
+          ),
+        ),
         appBarTheme: AppBarTheme(
           backgroundColor: darkScheme.surface,
           foregroundColor: darkScheme.onSurface,
@@ -143,10 +188,11 @@ class _HomePageState extends State<HomePage> {
   bool _cancelled = false;
   int _progressStage = 0;
   static const List<String> _stages = [
-    'Extracting…',
-    'Finding high-yield…',
-    'Building cards…',
-    'Packing your study pack…',
+  'Parsing',
+  'Detecting high-yield',
+  'Generating cards',
+  'Building outline',
+  'Packing files',
   ];
 
   void _startProgressTicker() {
@@ -167,6 +213,7 @@ class _HomePageState extends State<HomePage> {
       _selectedFiles = [];
       _cancelled = false;
     });
+  AppActivity.isGenerating.value = true;
     _startProgressTicker();
 
     final picked = await FilePicker.platform.pickFiles(
@@ -202,24 +249,28 @@ class _HomePageState extends State<HomePage> {
         final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         final outline = (body['outline'] ?? '').toString();
         // Save session locally
+  final now = DateTime.now();
+  final defaultName = 'Study Pack — ${_formatDateTime(now)}';
         final session = StudySession(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          createdAt: DateTime.now(),
+          name: defaultName,
+          createdAt: now,
           flashcards: cards,
           outline: outline,
         );
         await StudyStorage.saveSession(session);
         if (!mounted) return;
         if (_cancelled) return;
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => PreviewScreen(
-              originalFiles: _selectedFiles,
-              flashcards: cards,
-              outline: outline,
-            ),
+  Navigator.of(context).push(_fadeSlide(
+          PreviewScreen(
+            originalFiles: _selectedFiles,
+            flashcards: cards,
+            outline: outline,
+            sessionId: session.id,
+            sessionName: defaultName,
           ),
-        );
+          context,
+        ));
       } else {
         setState(() {
           _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? 'Request failed'}';
@@ -233,7 +284,8 @@ class _HomePageState extends State<HomePage> {
       }
     } finally {
       _client?.close();
-      if (mounted) setState(() => _loading = false);
+  if (mounted) setState(() => _loading = false);
+  AppActivity.isGenerating.value = false;
     }
   }
 
@@ -328,7 +380,14 @@ class _HomePageState extends State<HomePage> {
                                       child: CircularProgressIndicator(strokeWidth: 3),
                                     ),
                                     const SizedBox(width: 12),
-                                    Text(_stages[_progressStage], style: textTheme.bodyMedium),
+                                    AnimatedSwitcher(
+                                      duration: Duration(milliseconds: MediaQuery.of(context).disableAnimations ? 0 : 180),
+                                      child: Text(
+                                        _stages[_progressStage],
+                                        key: ValueKey(_stages[_progressStage]),
+                                        style: textTheme.bodyMedium,
+                                      ),
+                                    ),
                                   ],
                                 ),
                                 const SizedBox(height: 16),
@@ -336,11 +395,14 @@ class _HomePageState extends State<HomePage> {
                                   children: [
                                     Expanded(
                                       child: TextButton(
-                                        style: TextButton.styleFrom(minimumSize: const Size(88, 52)),
                                         onPressed: () {
                                           _cancelled = true;
                                           _client?.close();
                                           if (mounted) setState(() => _loading = false);
+                                          // Ensure we end up on Home if invoked elsewhere
+                                          if (Navigator.of(context).canPop()) {
+                                            Navigator.of(context).popUntil((r) => r.isFirst);
+                                          }
                                         },
                                         child: const Text('Cancel'),
                                       ),
@@ -367,7 +429,9 @@ class PreviewScreen extends StatefulWidget {
   final List<PlatformFile>? originalFiles;
   final List<Map<String, dynamic>> flashcards;
   final String outline;
-  const PreviewScreen({super.key, this.originalFiles, required this.flashcards, required this.outline});
+  final String? sessionId; // when opened from Library
+  final String? sessionName; // display name
+  const PreviewScreen({super.key, this.originalFiles, required this.flashcards, required this.outline, this.sessionId, this.sessionName});
 
   @override
   State<PreviewScreen> createState() => _PreviewScreenState();
@@ -377,22 +441,42 @@ enum PreviewTab { flashcards, outline }
 
 class _PreviewScreenState extends State<PreviewScreen> {
   PreviewTab _tab = PreviewTab.flashcards;
-  late List<bool> _selected;
+  late List<ValueNotifier<bool>> _selected;
+  final ValueNotifier<int> _selectedCountVN = ValueNotifier<int>(0);
   bool _downloading = false;
+  bool _bulkPulse = false;
 
   @override
   void initState() {
     super.initState();
-    _selected = List<bool>.filled(widget.flashcards.length, true);
+    // Mark open pack if we have a session id (opened from Library)
+    if (widget.sessionId != null) {
+      AppActivity.openPackId.value = widget.sessionId;
+    }
+    _selected = List.generate(widget.flashcards.length, (_) => ValueNotifier<bool>(true));
+    _selectedCountVN.value = widget.flashcards.length;
+  }
+
+  @override
+  void dispose() {
+    for (final vn in _selected) {
+      vn.dispose();
+    }
+    _selectedCountVN.dispose();
+    if (widget.sessionId != null && AppActivity.openPackId.value == widget.sessionId) {
+      AppActivity.openPackId.value = null;
+    }
+    super.dispose();
   }
 
   Future<void> _downloadStudyPack() async {
     if (_downloading) return;
     setState(() => _downloading = true);
+    AppActivity.isExporting.value = true;
     try {
-  final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
-  final files = widget.originalFiles ?? const <PlatformFile>[];
-  for (final f in files) {
+      final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
+      final files = widget.originalFiles ?? const <PlatformFile>[];
+      for (final f in files) {
         if (f.bytes != null) {
           req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
         } else if (f.path != null) {
@@ -403,31 +487,36 @@ class _PreviewScreenState extends State<PreviewScreen> {
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 200) {
         final bytes = res.bodyBytes;
-        // Web or if share is unavailable: save the file instead.
+        final title = (widget.sessionName ?? 'Study Pack').trim();
+        String sanitize(String s) {
+          final cleaned = s.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_').replaceAll(RegExp(r'_+'), '_').trim();
+          return cleaned.isEmpty ? 'study_pack' : (cleaned.length > 60 ? cleaned.substring(0, 60) : cleaned);
+        }
+        final baseName = sanitize(title);
         if (kIsWeb) {
           await FileSaver.instance.saveFile(
-            name: 'study_pack',
+            name: baseName,
             bytes: bytes,
             ext: 'zip',
             mimeType: MimeType.other,
           );
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved study_pack.zip')));
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved ${baseName}.zip')));
           }
         } else {
           try {
             await Share.shareXFiles([
-              XFile.fromData(bytes, name: 'study_pack.zip', mimeType: 'application/zip'),
-            ], text: 'Your study pack is ready!');
+              XFile.fromData(bytes, name: '${baseName}.zip', mimeType: 'application/zip'),
+            ], text: 'Your study pack is ready: ${title}');
           } catch (_) {
             await FileSaver.instance.saveFile(
-              name: 'study_pack',
+              name: baseName,
               bytes: bytes,
               ext: 'zip',
               mimeType: MimeType.other,
             );
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved study_pack.zip')));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved ${baseName}.zip')));
             }
           }
         }
@@ -444,24 +533,23 @@ class _PreviewScreenState extends State<PreviewScreen> {
       }
     } finally {
       if (mounted) setState(() => _downloading = false);
+      AppActivity.isExporting.value = false;
     }
   }
 
   void _goStudy() {
     final kept = <Map<String, dynamic>>[];
     for (var i = 0; i < widget.flashcards.length; i++) {
-      if (_selected[i]) kept.add(widget.flashcards[i]);
+  if (_selected[i].value) kept.add(widget.flashcards[i]);
     }
     if (kept.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select at least one card')));
       return;
     }
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => StudyScreen(cards: kept)),
-    );
+  Navigator.of(context).push(_fadeSlide(StudyScreen(cards: kept, title: widget.sessionName), context));
   }
 
-  int get _selectedCount => _selected.where((e) => e).length;
+  int get _selectedCount => _selectedCountVN.value;
 
   void _setTab(PreviewTab t) {
     setState(() => _tab = t);
@@ -472,11 +560,17 @@ class _PreviewScreenState extends State<PreviewScreen> {
 
   void _bulkSelect(bool value) {
     HapticFeedback.lightImpact();
-    setState(() {
-      for (var i = 0; i < _selected.length; i++) {
-        _selected[i] = value;
-      }
-    });
+    for (var i = 0; i < _selected.length; i++) {
+      _selected[i].value = value;
+    }
+    _selectedCountVN.value = value ? _selected.length : 0;
+    if (value) {
+      setState(() => _bulkPulse = true);
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        setState(() => _bulkPulse = false);
+      });
+    }
   }
 
   @override
@@ -493,9 +587,30 @@ class _PreviewScreenState extends State<PreviewScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('Preview'),
-            if (_selectedCount > 0)
-              Text('${_selectedCount} selected',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.75))),
+            AnimatedSwitcher(
+              duration: Duration(milliseconds: MediaQuery.of(context).disableAnimations ? 0 : 180),
+              child: _selectedCount > 0
+                  ? Row(
+                      key: ValueKey('sel-${_selectedCount}') ,
+                      children: [
+                        AnimatedOpacity(
+                          duration: Duration(milliseconds: MediaQuery.of(context).disableAnimations ? 0 : 150),
+                          opacity: _bulkPulse ? 1 : 0,
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 6),
+                            child: Icon(Icons.check_circle, size: 16),
+                          ),
+                        ),
+                        Text(
+                          '${_selectedCount} selected',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.75),
+                              ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ],
         ),
         actions: [
@@ -515,8 +630,13 @@ class _PreviewScreenState extends State<PreviewScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: SegmentedButton<PreviewTab>(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Semantics(
+              container: true,
+              label: 'Preview mode',
+              hint: 'Switch between Flashcards and Outline',
+              value: _tab == PreviewTab.flashcards ? 'Flashcards' : 'Outline',
+              child: SegmentedButton<PreviewTab>(
               segments: const [
                 ButtonSegment(value: PreviewTab.flashcards, label: Text('Flashcards'), icon: Icon(Icons.style_outlined)),
                 ButtonSegment(value: PreviewTab.outline, label: Text('Outline'), icon: Icon(Icons.article_outlined)),
@@ -524,7 +644,8 @@ class _PreviewScreenState extends State<PreviewScreen> {
               selected: {_tab},
               onSelectionChanged: (s) => _setTab(s.first),
               style: ButtonStyle(
-        foregroundColor: WidgetStatePropertyAll(primary),
+                foregroundColor: WidgetStatePropertyAll(primary),
+              ),
               ),
             ),
           ),
@@ -542,18 +663,28 @@ class _PreviewScreenState extends State<PreviewScreen> {
           child: Row(
             children: [
               Expanded(
-                child: ElevatedButton(
-                  onPressed: _downloading || (widget.originalFiles == null || widget.originalFiles!.isEmpty)
-                      ? null
-                      : _downloadStudyPack,
-                  child: Text(_downloading ? 'Preparing…' : 'Download study pack'),
+                child: Semantics(
+                  button: true,
+                  label: 'Download study pack',
+                  hint: 'Share or save a ZIP of your study materials',
+                  child: ElevatedButton(
+                    onPressed: _downloading || (widget.originalFiles == null || widget.originalFiles!.isEmpty)
+                        ? null
+                        : _downloadStudyPack,
+                    child: Text(_downloading ? 'Preparing…' : 'Download study pack'),
+                  ),
                 ),
               ),
         const SizedBox(width: 12),
               Expanded(
-                child: OutlinedButton(
-                  onPressed: _selectedCount == 0 ? null : _goStudy,
-                  child: const Text('Study now'),
+                child: Semantics(
+                  button: true,
+                  label: 'Study now',
+                  hint: 'Open flashcards in study mode',
+                  child: OutlinedButton(
+                    onPressed: _selectedCount == 0 ? null : _goStudy,
+                    child: const Text('Study now'),
+                  ),
                 ),
               ),
             ],
@@ -578,23 +709,24 @@ class _PreviewScreenState extends State<PreviewScreen> {
       itemBuilder: (context, i) {
         final c = cards[i];
         final front = (c['front'] ?? '').toString();
-        return StatefulBuilder(
-          builder: (context, setLocal) => ListTile(
-      title: Text(front, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+        return ValueListenableBuilder<bool>(
+          valueListenable: _selected[i],
+          builder: (context, checked, _) => ListTile(
+            title: Text(front, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
             trailing: Checkbox(
-              value: _selected[i],
+              value: checked,
               onChanged: (v) {
                 final nv = v ?? true;
-                setLocal(() {});
-                setState(() => _selected[i] = nv);
+                _selected[i].value = nv;
+                _selectedCountVN.value += nv ? 1 : -1;
               },
             ),
             onTap: () {
-              final nv = !_selected[i];
-              setLocal(() {});
-              setState(() => _selected[i] = nv);
+              final nv = !checked;
+              _selected[i].value = nv;
+              _selectedCountVN.value += nv ? 1 : -1;
             },
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             visualDensity: VisualDensity.compact,
           ),
         );
@@ -641,7 +773,8 @@ class _EmptyState extends StatelessWidget {
 
 class StudyScreen extends StatelessWidget {
   final List<Map<String, dynamic>> cards;
-  const StudyScreen({super.key, required this.cards});
+  final String? title;
+  const StudyScreen({super.key, required this.cards, this.title});
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -651,7 +784,11 @@ class StudyScreen extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(),
           tooltip: 'Back',
         ),
-        title: const Text('Study'),
+        title: Tooltip(
+          message: title ?? 'Study',
+          preferBelow: false,
+          child: Text(title ?? 'Study', maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
       ),
       body: SafeArea(
         child: Padding(
@@ -666,14 +803,16 @@ class StudyScreen extends StatelessWidget {
 // ---------------------- Local Storage ----------------------
 class StudySession {
   final String id;
+  final String name;
   final DateTime createdAt;
   final List<Map<String, dynamic>> flashcards;
   final String outline;
 
-  StudySession({required this.id, required this.createdAt, required this.flashcards, required this.outline});
+  StudySession({required this.id, required this.name, required this.createdAt, required this.flashcards, required this.outline});
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'name': name,
         'createdAt': createdAt.toIso8601String(),
         'flashcards': flashcards,
         'outline': outline,
@@ -681,12 +820,15 @@ class StudySession {
 
   static StudySession? fromJson(Map<String, dynamic> j) {
     try {
-      return StudySession(
-        id: j['id'] as String,
-        createdAt: DateTime.parse(j['createdAt'] as String),
-        flashcards: (j['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? <Map<String, dynamic>>[],
-        outline: (j['outline'] ?? '').toString(),
-      );
+      final id = j['id'] as String;
+      final created = DateTime.parse(j['createdAt'] as String);
+      final nameRaw = j['name'];
+    final name = (nameRaw == null || (nameRaw as Object).toString().trim().isEmpty)
+      ? 'Study Pack — ${_formatDateTime(created)}'
+          : nameRaw.toString();
+      final flashcards = (j['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? <Map<String, dynamic>>[];
+      final outline = (j['outline'] ?? '').toString();
+      return StudySession(id: id, name: name, createdAt: created, flashcards: flashcards, outline: outline);
     } catch (_) {
       return null;
     }
@@ -709,6 +851,19 @@ class StudyStorage {
     final prefs = await SharedPreferences.getInstance();
     final ids = await _getIndex(prefs);
     if (!ids.contains(s.id)) ids.insert(0, s.id);
+    await _setIndex(prefs, ids);
+    await prefs.setString('session_${s.id}', jsonEncode(s.toJson()));
+  }
+
+  static Future<void> saveSessionAt(StudySession s, {int? index}) async {
+    final prefs = await SharedPreferences.getInstance();
+    var ids = await _getIndex(prefs);
+    ids.remove(s.id);
+    if (index == null || index < 0 || index > ids.length) {
+      ids.insert(0, s.id);
+    } else {
+      ids.insert(index, s.id);
+    }
     await _setIndex(prefs, ids);
     await prefs.setString('session_${s.id}', jsonEncode(s.toJson()));
   }
@@ -736,6 +891,17 @@ class StudyStorage {
     await _setIndex(prefs, ids);
     await prefs.remove('session_$id');
   }
+
+  static Future<void> renameSession(String id, String newName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('session_$id');
+    if (raw == null) return;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      map['name'] = newName;
+      await prefs.setString('session_$id', jsonEncode(map));
+    } catch (_) {}
+  }
 }
 
 class LibraryScreen extends StatefulWidget {
@@ -745,94 +911,479 @@ class LibraryScreen extends StatefulWidget {
 }
 
 class _LibraryScreenState extends State<LibraryScreen> {
-  late Future<List<StudySession>> _future;
+  final FocusNode _listFocusNode = FocusNode(debugLabel: 'library_list');
+  bool _loading = true;
+  List<StudySession> _items = [];
+  bool _selectMode = false;
+  final Set<String> _selected = <String>{};
+  StudySession? _recentlyDeleted;
+  int _recentlyDeletedIndex = -1;
 
   @override
   void initState() {
     super.initState();
-    _future = StudyStorage.loadAll();
+    _load();
   }
 
-  void _refresh() => setState(() => _future = StudyStorage.loadAll());
-
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+  void dispose() {
+    _listFocusNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final list = await StudyStorage.loadAll();
+    if (!mounted) return;
+    setState(() {
+      _items = list;
+      _loading = false;
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selectMode = false;
+      _selected.clear();
+    });
+    FocusScope.of(context).requestFocus(_listFocusNode);
+  }
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (_selected.contains(id)) {
+        _selected.remove(id);
+      } else {
+        _selected.add(id);
+      }
+    });
+  }
+
+  bool _nameExists(String name, {String? exceptId}) {
+    final lower = name.toLowerCase();
+    for (final s in _items) {
+      if (exceptId != null && s.id == exceptId) continue;
+      if (s.name.toLowerCase() == lower) return true;
+    }
+    return false;
+  }
+
+  Future<void> _promptRename(StudySession s) async {
+    final controller = TextEditingController(text: s.name);
+    String? error;
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename pack'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Back',
-                    style: IconButton.styleFrom(backgroundColor: Colors.white, padding: const EdgeInsets.all(8)),
-                    icon: const Icon(Icons.arrow_back, color: Colors.black87),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text('Previous Study Packs', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: FutureBuilder<List<StudySession>>(
-                  future: _future,
-                  builder: (context, snap) {
-                    if (snap.connectionState != ConnectionState.done) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final items = snap.data ?? const <StudySession>[];
-                    if (items.isEmpty) {
-                      return const Center(child: Text('No saved study packs', style: TextStyle(color: Colors.white70)));
-                    }
-                    return ListView.builder(
-                      itemCount: items.length,
-                      itemBuilder: (context, i) {
-                        final s = items[i];
-                        return Dismissible(
-                          key: Key(s.id),
-                          background: Container(color: Colors.redAccent),
-                          onDismissed: (_) async {
-                            await StudyStorage.deleteSession(s.id);
-                            _refresh();
-                          },
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.black12),
-                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))],
-                            ),
-                            child: ListTile(
-                              title: Text('Study Pack — ${s.createdAt.toLocal()}'),
-                              subtitle: Text('${s.flashcards.length} cards', maxLines: 1, overflow: TextOverflow.ellipsis),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => PreviewScreen(
-                                      originalFiles: const [],
-                                      flashcards: s.flashcards,
-                                      outline: s.outline,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLength: 60,
+                decoration: InputDecoration(
+                  hintText: 'Enter name',
+                  errorText: error,
                 ),
+                onSubmitted: (_) => Navigator.of(context).pop('save'),
               ),
             ],
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop('cancel'), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.of(context).pop('save'), child: const Text('Save')),
+          ],
+        );
+      },
+    );
+
+    if (result == 'save') {
+      String name = controller.text.trim();
+      bool invalid = name.isEmpty || name.length > 60 ||
+          name.startsWith('.') || name.endsWith('.') ||
+          name.startsWith('/') || name.endsWith('/') ||
+          name.startsWith('\\') || name.endsWith('\\') ||
+          _nameExists(name, exceptId: s.id);
+      if (invalid) {
+        final dup = _nameExists(name, exceptId: s.id);
+        error = dup ? "Name already exists" : "Name can’t be empty";
+        // Reopen dialog with inline error
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) {
+            return AlertDialog(
+              title: const Text('Rename pack'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: TextEditingController(text: controller.text),
+                    autofocus: true,
+                    maxLength: 60,
+                    decoration: InputDecoration(
+                      hintText: 'Enter name',
+                      errorText: error,
+                    ),
+                    onSubmitted: (_) => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+                TextButton(onPressed: () async {
+                  Navigator.of(context).pop();
+                  await _promptRename(s);
+                }, child: const Text('Save')),
+              ],
+            );
+          },
+        );
+        return;
+      }
+      final oldName = s.name;
+      // Optimistic update
+      setState(() {
+        final idx = _items.indexWhere((e) => e.id == s.id);
+        if (idx != -1) {
+          _items[idx] = StudySession(
+            id: s.id,
+            name: name,
+            createdAt: s.createdAt,
+            flashcards: s.flashcards,
+            outline: s.outline,
+          );
+        }
+      });
+      try {
+        await StudyStorage.renameSession(s.id, name);
+        SemanticsService.announce('Renamed to $name', TextDirection.ltr);
+      } catch (e) {
+        // Revert
+        setState(() {
+          final idx = _items.indexWhere((e) => e.id == s.id);
+          if (idx != -1) {
+            _items[idx] = StudySession(
+              id: s.id,
+              name: oldName,
+              createdAt: s.createdAt,
+              flashcards: s.flashcards,
+              outline: s.outline,
+            );
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rename failed')));
+      }
+      FocusScope.of(context).requestFocus(_listFocusNode);
+    } else {
+      FocusScope.of(context).requestFocus(_listFocusNode);
+    }
+  }
+
+  Future<bool> _confirmDeleteDialog({int count = 1}) async {
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete pack?'),
+        content: const Text("This will remove it from your device. You can’t undo this."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return res == true;
+  }
+
+  void _deleteSingle(StudySession s, int index) async {
+    if (AppActivity.isGenerating.value || AppActivity.isExporting.value) return;
+    if (AppActivity.openPackId.value == s.id) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Close the pack before deleting.')));
+      return;
+    }
+    final ok = await _confirmDeleteDialog();
+    if (!ok) return;
+
+    setState(() {
+      _recentlyDeleted = s;
+      _recentlyDeletedIndex = index;
+      _items.removeAt(index);
+    });
+    await StudyStorage.deleteSession(s.id);
+    SemanticsService.announce('Deleted', TextDirection.ltr);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Pack deleted'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            final toRestore = _recentlyDeleted;
+            final idx = _recentlyDeletedIndex;
+            if (toRestore == null || idx < 0) return;
+            setState(() {
+              _items.insert(idx, toRestore);
+            });
+            await StudyStorage.saveSessionAt(toRestore, index: idx);
+            SemanticsService.announce('Restored', TextDirection.ltr);
+          },
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty) return;
+    // Prevent delete if any selected is open or while busy
+    if (AppActivity.isGenerating.value || AppActivity.isExporting.value) return;
+    final openId = AppActivity.openPackId.value;
+    if (openId != null && _selected.contains(openId)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Close the pack before deleting.')));
+      return;
+    }
+    final ok = await _confirmDeleteDialog(count: _selected.length);
+    if (!ok) return;
+    final ids = Set<String>.from(_selected);
+    final removed = <int, StudySession>{};
+    setState(() {
+      for (int i = _items.length - 1; i >= 0; i--) {
+        final s = _items[i];
+        if (ids.contains(s.id)) {
+          removed[i] = s;
+          _items.removeAt(i);
+        }
+      }
+      _selectMode = false;
+      _selected.clear();
+    });
+    for (final s in removed.values) {
+      await StudyStorage.deleteSession(s.id);
+    }
+    SemanticsService.announce('Deleted', TextDirection.ltr);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(removed.length == 1 ? 'Pack deleted' : 'Packs deleted'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            // Restore in original positions order
+            final entries = removed.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+            for (final e in entries) {
+              setState(() {
+                _items.insert(e.key, e.value);
+              });
+              await StudyStorage.saveSessionAt(e.value, index: e.key);
+            }
+            SemanticsService.announce('Restored', TextDirection.ltr);
+          },
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(),
+          tooltip: 'Back',
+        ),
+        title: _selectMode
+            ? Text('${_selected.length} selected')
+            : const Text('Previous packs', maxLines: 1, overflow: TextOverflow.ellipsis),
+        actions: _selectMode
+            ? [
+                IconButton(
+                  tooltip: 'Rename',
+                  onPressed: _selected.length == 1
+                      ? () {
+                          final id = _selected.first;
+                          final s = _items.firstWhere((e) => e.id == id);
+                          _promptRename(s).then((_) => _exitSelection());
+                        }
+                      : null,
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Delete',
+                  onPressed: _selected.isNotEmpty ? _deleteSelected : null,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ]
+            : null,
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _items.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('No previous packs yet', style: theme.textTheme.bodyMedium?.copyWith(color: theme.textTheme.bodyMedium?.color?.withOpacity(0.8))),
+                          const SizedBox(height: 8),
+                          OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Upload notes'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Focus(
+                      focusNode: _listFocusNode,
+                      child: ListView.separated(
+                        itemCount: _items.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final s = _items[i];
+                          final selected = _selected.contains(s.id);
+                          return Dismissible(
+                            key: Key(s.id),
+                            direction: _selectMode ? DismissDirection.none : DismissDirection.horizontal,
+                            background: Container(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              alignment: Alignment.centerLeft,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: Row(children: [Icon(Icons.edit_outlined, color: theme.colorScheme.primary), const SizedBox(width: 8), const Text('Rename')]),
+                            ),
+                            secondaryBackground: Container(
+                              color: theme.colorScheme.errorContainer,
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [const Text('Delete'), const SizedBox(width: 8), Icon(Icons.delete_outline, color: theme.colorScheme.error)]),
+                            ),
+                            confirmDismiss: (dir) async {
+                              if (AppActivity.isGenerating.value || AppActivity.isExporting.value || AppActivity.openPackId.value == s.id) {
+                                if (dir == DismissDirection.endToStart) {
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Close the pack before deleting.')));
+                                }
+                                return false;
+                              }
+                              if (dir == DismissDirection.startToEnd) {
+                                // Swipe right -> Rename
+                                await _promptRename(s);
+                                return false;
+                              } else if (dir == DismissDirection.endToStart) {
+                                // Swipe left -> Delete (confirm)
+                                final ok = await _confirmDeleteDialog();
+                                return ok;
+                              }
+                              return false;
+                            },
+                            onDismissed: (dir) async {
+                              // Only delete here after confirmDismiss returned true
+                              _recentlyDeleted = s;
+                              _recentlyDeletedIndex = i;
+                              setState(() {
+                                _items.removeAt(i);
+                              });
+                              await StudyStorage.deleteSession(s.id);
+                              SemanticsService.announce('Deleted', TextDirection.ltr);
+                              final messenger = ScaffoldMessenger.of(context);
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: const Text('Pack deleted'),
+                                  action: SnackBarAction(
+                                    label: 'Undo',
+                                    onPressed: () async {
+                                      final toRestore = _recentlyDeleted;
+                                      final idx = _recentlyDeletedIndex;
+                                      if (toRestore == null || idx < 0) return;
+                                      setState(() {
+                                        _items.insert(idx, toRestore);
+                                      });
+                                      await StudyStorage.saveSessionAt(toRestore, index: idx);
+                                      SemanticsService.announce('Restored', TextDirection.ltr);
+                                    },
+                                  ),
+                                  duration: const Duration(seconds: 6),
+                                ),
+                              );
+                            },
+                            child: ListTile(
+                              onLongPress: () {
+                                setState(() {
+                                  _selectMode = true;
+                                  _selected.clear();
+                                  _selected.add(s.id);
+                                });
+                              },
+                              onTap: _selectMode
+                                  ? () => _toggleSelect(s.id)
+          : () {
+                                      Navigator.of(context).push(_fadeSlide(
+                                        PreviewScreen(
+                                          originalFiles: const [],
+                                          flashcards: s.flashcards,
+                                          outline: s.outline,
+            sessionId: s.id,
+                                        ),
+                                        context,
+                                      ));
+                                    },
+                              leading: _selectMode
+                                  ? Checkbox(
+                                      value: selected,
+                                      onChanged: (_) => _toggleSelect(s.id),
+                                    )
+                                  : null,
+                              title: Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(_formatDateTime(s.createdAt), style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodySmall?.color?.withOpacity(0.75))),
+                                  Text('${s.flashcards.length} cards', style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodySmall?.color?.withOpacity(0.75))),
+                                ],
+                              ),
+                              trailing: _selectMode
+                                  ? null
+                                  : PopupMenuButton<String>(
+                                      onSelected: (v) {
+                                        if (v == 'rename') _promptRename(s);
+                                        if (v == 'delete') _deleteSingle(s, i);
+                                      },
+                                      itemBuilder: (context) => [
+                                        const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          enabled: !(AppActivity.isGenerating.value || AppActivity.isExporting.value || AppActivity.openPackId.value == s.id),
+                                          child: const Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
         ),
       ),
+      floatingActionButton: _selectMode
+          ? FloatingActionButton.extended(
+              onPressed: _exitSelection,
+              label: const Text('Done'),
+              icon: const Icon(Icons.check),
+            )
+          : null,
     );
   }
 }
