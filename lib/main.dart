@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:flutter/foundation.dart';
 
 void main() => runApp(const SpacedApp());
 
@@ -90,15 +92,42 @@ class _HomePageState extends State<HomePage> {
   String _status = '';
   final String previewApi = 'http://10.0.2.2:8000/preview-study-pack?limit=200';
   List<PlatformFile> _selectedFiles = [];
+  http.Client? _client;
+  bool _cancelled = false;
+  int _progressStage = 0;
+  static const List<String> _stages = [
+    'Extracting…',
+    'Finding high-yield…',
+    'Building cards…',
+    'Packing your study pack…',
+  ];
+
+  void _startProgressTicker() {
+    _progressStage = 0;
+    Future.doWhile(() async {
+      if (!_loading) return false;
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (!_loading) return false;
+      if (mounted) setState(() => _progressStage = (_progressStage + 1) % _stages.length);
+      return _loading;
+    });
+  }
 
   Future<void> _pickAndPreview() async {
     setState(() {
       _loading = true;
       _status = '';
       _selectedFiles = [];
+      _cancelled = false;
     });
+    _startProgressTicker();
 
-    final picked = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
+    final picked = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: true,
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'docx', 'txt', 'jpg', 'jpeg', 'png'],
+    );
     if (picked == null || picked.files.isEmpty) {
       setState(() {
         _loading = false;
@@ -118,7 +147,8 @@ class _HomePageState extends State<HomePage> {
     }
 
     try {
-      final streamed = await req.send();
+      _client = http.Client();
+      final streamed = await _client!.send(req);
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -133,6 +163,7 @@ class _HomePageState extends State<HomePage> {
         );
         await StudyStorage.saveSession(session);
         if (!mounted) return;
+        if (_cancelled) return;
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => PreviewScreen(
@@ -148,75 +179,138 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } catch (e) {
-      setState(() {
-        _status = 'Network error: $e';
-      });
+      if (!_cancelled) {
+        setState(() {
+          _status = 'Network error: $e';
+        });
+      }
     } finally {
+      _client?.close();
       if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Turn your notes into a study system fast',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 24),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.black12),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4)),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ElevatedButton(
+        child: Stack(
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Turn notes into a study system.',
+                        textAlign: TextAlign.center,
+                        style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'PDF, DOCX, TXT, Images.',
+                        textAlign: TextAlign.center,
+                        style: textTheme.bodyMedium?.copyWith(color: textTheme.bodyMedium?.color?.withOpacity(0.8)),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '1 Upload • 2 Preview • 3 Study',
+                        textAlign: TextAlign.center,
+                        style: textTheme.bodySmall?.copyWith(color: textTheme.bodySmall?.color?.withOpacity(0.7)),
+                      ),
+                      const SizedBox(height: 24),
+                      Semantics(
+                        button: true,
+                        label: 'Upload notes',
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                           onPressed: _loading ? null : _pickAndPreview,
-                          child: Text(_loading ? 'Working…' : 'Upload Study Notes'),
+                          child: const Text('Upload notes'),
                         ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Supports PDF, DOCX, TXT, Images',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.black54),
-                        ),
-                        const SizedBox(height: 12),
-                        OutlinedButton(
+                      ),
+                      const SizedBox(height: 16),
+                      Align(
+                        alignment: Alignment.center,
+                        child: TextButton(
+                          style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(builder: (_) => const LibraryScreen()),
                           ),
-                          child: const Text('Previous Study Packs'),
+                          child: const Text('Previous packs'),
                         ),
-                        if (_status.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black87)),
-                        ]
+                      ),
+                      if (_status.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        Text(_status, textAlign: TextAlign.center),
                       ],
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
+            if (_loading)
+              Positioned.fill(
+                child: Stack(
+                  children: [
+                    // Modal barrier
+                    ModalBarrier(color: theme.colorScheme.surface.withOpacity(0.6), dismissible: false),
+                    Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: Material(
+                          elevation: 8,
+                          borderRadius: BorderRadius.circular(12),
+                          color: theme.colorScheme.surface,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(color: theme.colorScheme.primary, strokeWidth: 3),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Text(_stages[_progressStage], style: textTheme.bodyMedium),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextButton(
+                                        style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
+                                        onPressed: () {
+                                          _cancelled = true;
+                                          _client?.close();
+                                          if (mounted) setState(() => _loading = false);
+                                        },
+                                        child: const Text('Cancel'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -264,15 +358,33 @@ class _PreviewScreenState extends State<PreviewScreen> {
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 200) {
         final bytes = res.bodyBytes;
-        // Share sheet so user can send to Drive/Gmail/etc.
-        // Avoid writing to disk; share from memory.
-        // ignore: deprecated_member_use
-        // Using XFile from share_plus
-        await Share.shareXFiles([
-          XFile.fromData(bytes, name: 'study_pack.zip', mimeType: 'application/zip'),
-        ], text: 'Your study pack is ready!');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Study Pack ready')));
+        // Web or if share is unavailable: save the file instead.
+        if (kIsWeb) {
+          await FileSaver.instance.saveFile(
+            name: 'study_pack',
+            bytes: bytes,
+            ext: 'zip',
+            mimeType: MimeType.other,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved study_pack.zip')));
+          }
+        } else {
+          try {
+            await Share.shareXFiles([
+              XFile.fromData(bytes, name: 'study_pack.zip', mimeType: 'application/zip'),
+            ], text: 'Your study pack is ready!');
+          } catch (_) {
+            await FileSaver.instance.saveFile(
+              name: 'study_pack',
+              bytes: bytes,
+              ext: 'zip',
+              mimeType: MimeType.other,
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved study_pack.zip')));
+            }
+          }
         }
       } else {
         if (mounted) {

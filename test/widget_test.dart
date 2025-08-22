@@ -12,6 +12,6 @@ import 'package:neuroforge_app/main.dart';
 void main() {
   testWidgets('Home shows upload button', (WidgetTester tester) async {
     await tester.pumpWidget(const SpacedApp());
-    expect(find.text('Upload Study Notes'), findsOneWidget);
+    expect(find.text('Upload notes'), findsOneWidget);
   });
 }
