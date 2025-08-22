@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
@@ -9,6 +10,12 @@ import 'package:file_saver/file_saver.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart';
+import 'config.dart';
+import 'picker/picker.dart';
+import 'picker/types.dart' as pick;
+import 'platform/multipart.dart' as mp;
+import 'repository.dart' show StudyPackRepository;
+import 'http_headers.dart';
 
 void main() => runApp(const SpacedApp());
 
@@ -182,28 +189,56 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   bool _loading = false;
   String _status = '';
-  final String previewApi = 'http://10.0.2.2:8000/preview-study-pack?limit=200';
+  final String previewApi = ApiConfig.uri('/preview-study-pack', {'limit': '200'}).toString();
   List<PlatformFile> _selectedFiles = [];
+  List<pick.PickedFile> _pickedDisplay = [];
   http.Client? _client;
   bool _cancelled = false;
-  int _progressStage = 0;
-  static const List<String> _stages = [
-  'Parsing',
-  'Detecting high-yield',
-  'Generating cards',
-  'Building outline',
-  'Packing files',
+  int _progressStage = 0; // index into rotating messages
+  double _progress = 0.0; // 0..1
+  bool _canRetry = false;
+  static const Duration _msgInterval = Duration(seconds: 5);
+  static const Duration _maxWait = Duration(minutes: 10);
+  DateTime? _phaseStart;
+  static const List<String> _uploadMsgs = [
+    'Uploading…',
+    'Still uploading…',
+    'Almost there…',
   ];
+  static const List<String> _processMsgs = [
+    'Parsing',
+    'Detecting high-yield',
+    'Generating cards',
+    'Building outline',
+  ];
+  Timer? _msgTimer;
 
-  void _startProgressTicker() {
+  void _startMsgRotation({required bool uploading}) {
     _progressStage = 0;
-    Future.doWhile(() async {
-      if (!_loading) return false;
-      await Future.delayed(const Duration(milliseconds: 800));
-      if (!_loading) return false;
-      if (mounted) setState(() => _progressStage = (_progressStage + 1) % _stages.length);
-      return _loading;
+    _msgTimer?.cancel();
+    _msgTimer = Timer.periodic(_msgInterval, (_) {
+      if (!_loading) return;
+      setState(() {
+        final list = uploading ? _uploadMsgs : _processMsgs;
+        _progressStage = (_progressStage + 1) % list.length;
+      });
     });
+  }
+
+  String get _currentMsg => _isUploadingPhase ? _uploadMsgs[_progressStage] : _processMsgs[_progressStage % _processMsgs.length];
+  bool get _isUploadingPhase => _phaseStart != null && _progress < 0.6;
+  void _setPhaseUploading() {
+    _phaseStart = DateTime.now();
+    _startMsgRotation(uploading: true);
+  }
+  void _setPhaseProcessing() {
+    _phaseStart = DateTime.now();
+    _startMsgRotation(uploading: false);
+  }
+  void _bumpProgressToward(double target, {double step = 0.02}) {
+    if (_progress < target) {
+      _progress = (_progress + step).clamp(0.0, target);
+    }
   }
 
   Future<void> _pickAndPreview() async {
@@ -212,81 +247,209 @@ class _HomePageState extends State<HomePage> {
       _status = '';
       _selectedFiles = [];
       _cancelled = false;
+      _canRetry = false;
+      _progress = 0.0;
     });
   AppActivity.isGenerating.value = true;
-    _startProgressTicker();
+    _setPhaseUploading();
 
-    final picked = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      withData: true,
-      type: FileType.custom,
-      allowedExtensions: const ['pdf', 'docx', 'txt', 'jpg', 'jpeg', 'png'],
-    );
-    if (picked == null || picked.files.isEmpty) {
+  final picker = getNotesPicker();
+  final pickedFiles = await picker.pickMultiple(allowedExtensions: const ['pdf', 'docx', 'txt', 'jpg', 'jpeg', 'png']);
+  if (pickedFiles == null || pickedFiles.isEmpty) {
       setState(() {
         _loading = false;
         _status = 'No files selected.';
       });
       return;
     }
-    _selectedFiles = picked.files;
+  // Enforce 10 MB per file limit
+  const int maxBytes = 10 * 1024 * 1024;
+  final filtered = pick.filterByMaxSize(pickedFiles, maxBytes);
+  _pickedDisplay = filtered.accepted;
+  if (filtered.rejected.isNotEmpty) {
+    final names = filtered.rejected.map((r) => r.name).take(3).join(', ');
+    _status = filtered.rejected.length == 1
+      ? '“${names}” is larger than 10 MB'
+      : '${filtered.rejected.length} files are larger than 10 MB${names.isNotEmpty ? ' (e.g., $names)' : ''}';
+  }
+  // Convert accepted to PlatformFile shape for upload layer
+  _selectedFiles = _pickedDisplay
+    .map((f) => PlatformFile(name: f.name, size: f.size, bytes: f.bytes, path: f.path))
+    .toList();
 
-    final req = http.MultipartRequest('POST', Uri.parse(previewApi));
-    for (final f in picked.files) {
-      if (f.bytes != null) {
-        req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
-      } else if (f.path != null) {
-        req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
-      }
-    }
+  final req = http.MultipartRequest('POST', Uri.parse(previewApi));
+  req.headers.addAll(await HttpHeadersHelper.previewHeaders());
+    await mp.addFilesToMultipart(req, _selectedFiles);
 
     try {
       _client = http.Client();
+      // Simulate upload progress while waiting for server to accept
+      final uploadTicker = Timer.periodic(const Duration(milliseconds: 600), (_) {
+        if (!_loading) return;
+        setState(() => _bumpProgressToward(0.6, step: 0.02));
+      });
       final streamed = await _client!.send(req);
+      uploadTicker.cancel();
       final res = await http.Response.fromStream(streamed);
+      if (_cancelled) return;
       if (res.statusCode == 200) {
+        // Immediate preview ready
+        setState(() => _progress = 1.0);
         final body = jsonDecode(res.body) as Map<String, dynamic>;
-        final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        final outline = (body['outline'] ?? '').toString();
-        // Save session locally
-  final now = DateTime.now();
-  final defaultName = 'Study Pack — ${_formatDateTime(now)}';
-        final session = StudySession(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: defaultName,
-          createdAt: now,
-          flashcards: cards,
-          outline: outline,
-        );
-        await StudyStorage.saveSession(session);
-        if (!mounted) return;
-        if (_cancelled) return;
-  Navigator.of(context).push(_fadeSlide(
-          PreviewScreen(
-            originalFiles: _selectedFiles,
-            flashcards: cards,
-            outline: outline,
-            sessionId: session.id,
-            sessionName: defaultName,
-          ),
-          context,
-        ));
+        await _openPreviewFromBody(body);
+      } else if (res.statusCode == 202 || res.statusCode == 201) {
+        // Accepted -> poll
+        final body = jsonDecode(res.body.isNotEmpty ? res.body : '{}') as Map<String, dynamic>;
+        final jobId = (body['job_id'] ?? body['jobId'] ?? body['id'] ?? '').toString();
+        if (jobId.isEmpty) {
+          setState(() {
+            _status = 'Upload accepted but no job id returned.';
+            _canRetry = true;
+          });
+        } else {
+          _setPhaseProcessing();
+          setState(() => _bumpProgressToward(0.7));
+          await _pollUntilReady(jobId);
+        }
+      } else if (res.statusCode == 413) {
+        setState(() {
+          _status = 'Upload too large. Please keep files under 10 MB each.';
+          _canRetry = true;
+        });
+      } else if (res.statusCode == 415) {
+        setState(() {
+          _status = 'Unsupported file type. Use PDF, DOCX, TXT, JPG, or PNG.';
+          _canRetry = true;
+        });
+      } else if (res.statusCode == 429) {
+        setState(() {
+          _status = 'Server busy. Please retry in a moment.';
+          _canRetry = true;
+        });
+      } else if (res.statusCode >= 500 && res.statusCode < 600) {
+        setState(() {
+          _status = 'Server error (${res.statusCode}). Please retry.';
+          _canRetry = true;
+        });
       } else {
         setState(() {
           _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? 'Request failed'}';
+          _canRetry = true;
         });
       }
     } catch (e) {
       if (!_cancelled) {
         setState(() {
           _status = 'Network error: $e';
+          _canRetry = true;
         });
       }
     } finally {
       _client?.close();
-  if (mounted) setState(() => _loading = false);
-  AppActivity.isGenerating.value = false;
+      if (mounted) {
+        // Keep overlay open if we can retry
+        if (!_canRetry) setState(() => _loading = false);
+      }
+      AppActivity.isGenerating.value = false;
+      _msgTimer?.cancel();
     }
+  }
+
+  Future<void> _pollUntilReady(String jobId) async {
+    final start = DateTime.now();
+    Duration backoff = const Duration(seconds: 2);
+    while (true) {
+      if (!mounted || _cancelled) return;
+      if (DateTime.now().difference(start) > _maxWait) {
+        setState(() {
+          _status = 'Taking longer than expected. Please retry later.';
+          _canRetry = true;
+        });
+        return;
+      }
+      try {
+        // Poll every ~5s
+        await Future.delayed(const Duration(seconds: 5));
+        if (_cancelled) return;
+  final uri = ApiConfig.uri('/preview-study-pack', {'job_id': jobId, 'limit': '200'});
+  final res = await http.get(uri, headers: await HttpHeadersHelper.previewHeaders());
+        if (_cancelled) return;
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>;
+          if (body.containsKey('flashcards')) {
+            setState(() => _progress = 1.0);
+            await _openPreviewFromBody(body);
+            return;
+          }
+          // Not ready but 200: bump progress a bit
+          setState(() => _bumpProgressToward(0.95));
+          continue;
+        } else if (res.statusCode == 202) {
+          // Still processing
+          setState(() => _bumpProgressToward(0.95));
+          continue;
+        } else if (res.statusCode == 429 || (res.statusCode >= 500 && res.statusCode < 600)) {
+          await Future.delayed(backoff);
+          backoff = Duration(milliseconds: (backoff.inMilliseconds * 1.6).toInt().clamp(2000, 20000));
+          continue;
+        } else if (res.statusCode == 413) {
+          setState(() {
+            _status = 'Upload too large. Please keep files under 10 MB each.';
+            _canRetry = true;
+          });
+          return;
+        } else if (res.statusCode == 415) {
+          setState(() {
+            _status = 'Unsupported file type. Use PDF, DOCX, TXT, JPG, or PNG.';
+            _canRetry = true;
+          });
+          return;
+        } else {
+          setState(() {
+            _status = 'Error ${res.statusCode}: ${res.reasonPhrase ?? ''}';
+            _canRetry = true;
+          });
+          return;
+        }
+      } catch (e) {
+        if (_cancelled) return;
+        setState(() {
+          _status = 'Network error while polling: $e';
+          _canRetry = true;
+        });
+        return;
+      }
+    }
+  }
+
+  Future<void> _openPreviewFromBody(Map<String, dynamic> body) async {
+    final cards = (body['flashcards'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final outline = (body['outline'] ?? '').toString();
+    final now = DateTime.now();
+    final defaultName = 'Study Pack — ${_formatDateTime(now)}';
+    final session = StudySession(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: defaultName,
+      createdAt: now,
+      flashcards: cards,
+      outline: outline,
+    );
+    await StudyStorage.saveSession(session);
+    if (!mounted || _cancelled) return;
+    setState(() {
+      _loading = false;
+      _canRetry = false;
+    });
+    Navigator.of(context).push(_fadeSlide(
+      PreviewScreen(
+        originalFiles: _selectedFiles,
+        flashcards: cards,
+        outline: outline,
+        sessionId: session.id,
+        sessionName: defaultName,
+      ),
+      context,
+    ));
   }
 
   @override
@@ -349,6 +512,25 @@ class _HomePageState extends State<HomePage> {
                         const SizedBox(height: 16),
                         Text(_status, textAlign: TextAlign.center),
                       ],
+                      if (_pickedDisplay.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text('Selected files', textAlign: TextAlign.center, style: textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 6),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 120),
+                          child: Scrollbar(
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: _pickedDisplay.length,
+                              itemBuilder: (context, i) {
+                                final f = _pickedDisplay[i];
+                                final mb = (f.size / (1024 * 1024)).toStringAsFixed(1);
+                                return Text('• ${f.name} — ${mb} MB', textAlign: TextAlign.center, style: textTheme.bodySmall);
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -372,27 +554,41 @@ class _HomePageState extends State<HomePage> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(strokeWidth: 3),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    AnimatedSwitcher(
-                                      duration: Duration(milliseconds: MediaQuery.of(context).disableAnimations ? 0 : 180),
-                                      child: Text(
-                                        _stages[_progressStage],
-                                        key: ValueKey(_stages[_progressStage]),
-                                        style: textTheme.bodyMedium,
-                                      ),
-                                    ),
-                                  ],
+                                Text('Preparing preview…', style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 12),
+                                LinearProgressIndicator(value: _progress == 0 ? null : _progress),
+                                const SizedBox(height: 8),
+                                AnimatedSwitcher(
+                                  duration: Duration(milliseconds: MediaQuery.of(context).disableAnimations ? 0 : 180),
+                                  child: Text(
+                                    _currentMsg,
+                                    key: ValueKey('msg$_progressStage'),
+                                    style: textTheme.bodySmall,
+                                  ),
                                 ),
                                 const SizedBox(height: 16),
                                 Row(
                                   children: [
+                                    if (_canRetry)
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () {
+                                            // retry with previous selection
+                                            if (_pickedDisplay.isEmpty) {
+                                              setState(() { _loading = false; });
+                                              return;
+                                            }
+                                            setState(() {
+                                              _status = '';
+                                              _canRetry = false;
+                                              _cancelled = false;
+                                              _progress = 0.0;
+                                            });
+                                            _pickAndPreview();
+                                          },
+                                          child: const Text('Retry'),
+                                        ),
+                                      ),
                                     Expanded(
                                       child: TextButton(
                                         onPressed: () {
@@ -409,6 +605,10 @@ class _HomePageState extends State<HomePage> {
                                     ),
                                   ],
                                 ),
+                                if (_status.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(_status, style: textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+                                ]
                               ],
                             ),
                           ),
@@ -445,6 +645,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
   final ValueNotifier<int> _selectedCountVN = ValueNotifier<int>(0);
   bool _downloading = false;
   bool _bulkPulse = false;
+  String? _sessionName;
 
   @override
   void initState() {
@@ -455,6 +656,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
     }
     _selected = List.generate(widget.flashcards.length, (_) => ValueNotifier<bool>(true));
     _selectedCountVN.value = widget.flashcards.length;
+  _sessionName = widget.sessionName;
   }
 
   @override
@@ -474,15 +676,10 @@ class _PreviewScreenState extends State<PreviewScreen> {
     setState(() => _downloading = true);
     AppActivity.isExporting.value = true;
     try {
-      final req = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/generate-study-pack'));
-      final files = widget.originalFiles ?? const <PlatformFile>[];
-      for (final f in files) {
-        if (f.bytes != null) {
-          req.files.add(http.MultipartFile.fromBytes('files', f.bytes!, filename: f.name));
-        } else if (f.path != null) {
-          req.files.add(await http.MultipartFile.fromPath('files', f.path!, filename: f.name));
-        }
-      }
+  final req = http.MultipartRequest('POST', ApiConfig.uri('/generate-study-pack'));
+  req.headers.addAll(await HttpHeadersHelper.zipHeaders());
+  final files = widget.originalFiles ?? const <PlatformFile>[];
+  await mp.addFilesToMultipart(req, files);
       final streamed = await req.send();
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 200) {
@@ -546,7 +743,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select at least one card')));
       return;
     }
-  Navigator.of(context).push(_fadeSlide(StudyScreen(cards: kept, title: widget.sessionName), context));
+  Navigator.of(context).push(_fadeSlide(StudyScreen(cards: kept, title: widget.sessionName, sessionId: widget.sessionId), context));
   }
 
   int get _selectedCount => _selectedCountVN.value;
@@ -614,6 +811,18 @@ class _PreviewScreenState extends State<PreviewScreen> {
           ],
         ),
         actions: [
+          if (widget.sessionId != null) ...[
+            IconButton(
+              tooltip: 'Rename pack',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: _renameCurrentPack,
+            ),
+            IconButton(
+              tooltip: 'Delete pack',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _deleteCurrentPack,
+            ),
+          ],
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'all') _bulkSelect(true);
@@ -703,31 +912,42 @@ class _PreviewScreenState extends State<PreviewScreen> {
         onTap: () => Navigator.of(context).pop(),
       );
     }
-  return ListView.separated(
+    return ListView.builder(
       itemCount: cards.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final c = cards[i];
         final front = (c['front'] ?? '').toString();
+        final back = (c['back'] ?? '').toString();
         return ValueListenableBuilder<bool>(
           valueListenable: _selected[i],
-          builder: (context, checked, _) => ListTile(
-            title: Text(front, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
-            trailing: Checkbox(
-              value: checked,
-              onChanged: (v) {
-                final nv = v ?? true;
-                _selected[i].value = nv;
-                _selectedCountVN.value += nv ? 1 : -1;
-              },
-            ),
-            onTap: () {
-              final nv = !checked;
-              _selected[i].value = nv;
-              _selectedCountVN.value += nv ? 1 : -1;
-            },
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            visualDensity: VisualDensity.compact,
+          builder: (context, checked, _) => Column(
+            children: [
+              ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                title: Text(front, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                trailing: Checkbox(
+                  value: checked,
+                  onChanged: (v) {
+                    final nv = v ?? true;
+                    _selected[i].value = nv;
+                    _selectedCountVN.value += nv ? 1 : -1;
+                  },
+                ),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Answer', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(back, style: Theme.of(context).textTheme.bodyMedium),
+                  ),
+                ],
+              ),
+              const Divider(height: 1),
+            ],
           ),
         );
       },
@@ -743,10 +963,135 @@ class _PreviewScreenState extends State<PreviewScreen> {
         onTap: () => Navigator.of(context).pop(),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: SingleChildScrollView(child: Text(text, style: Theme.of(context).textTheme.bodyMedium)),
+    final sections = _parseOutlineSections(text);
+    if (sections.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: SingleChildScrollView(child: Text(text, style: Theme.of(context).textTheme.bodyMedium)),
+      );
+    }
+    return ListView.separated(
+      itemCount: sections.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, i) {
+        final s = sections[i];
+        return ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          title: Text(s.title, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(s.body, style: Theme.of(context).textTheme.bodyMedium),
+            ),
+          ],
+        );
+      },
     );
+  }
+
+  List<_OutlineSection> _parseOutlineSections(String content) {
+    final lines = content.split('\n');
+    final List<_OutlineSection> out = [];
+    String? currentTitle;
+    final body = StringBuffer();
+    bool hasBody = false;
+    bool isHeading(String line) {
+      final t = line.trim();
+      if (t.isEmpty) return false;
+      if (RegExp(r'^#{1,6}\s').hasMatch(t)) return true;
+      if (RegExp(r'^[0-9]+[\.)]\s').hasMatch(t)) return true;
+      if (t.endsWith(':') && t.length < 80) return true;
+      return false;
+    }
+    void pushSection() {
+      if (currentTitle != null) {
+        out.add(_OutlineSection(currentTitle!, body.toString().trim()));
+      }
+      currentTitle = null;
+      body.clear();
+      hasBody = false;
+    }
+    for (final raw in lines) {
+      if (isHeading(raw)) {
+        pushSection();
+        var t = raw.trim();
+        t = t.replaceFirst(RegExp(r'^#{1,6}\s*'), '');
+        t = t.replaceFirst(RegExp(r'^[0-9]+[\.)]\s*'), '');
+        if (t.endsWith(':')) t = t.substring(0, t.length - 1).trim();
+        currentTitle = t;
+      } else {
+        if (hasBody) body.writeln();
+        body.write(raw);
+        hasBody = true;
+      }
+    }
+    pushSection();
+    return out;
+  }
+
+
+  Future<void> _renameCurrentPack() async {
+    if (widget.sessionId == null) return;
+    final controller = TextEditingController(text: _sessionName ?? '');
+    String? error;
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename pack'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 60,
+          decoration: InputDecoration(hintText: 'Enter name', errorText: error),
+          onSubmitted: (_) => Navigator.of(context).pop('save'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop('cancel'), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop('save'), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result != 'save') return;
+    final name = controller.text.trim();
+    if (name.isEmpty || name.length > 60) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid name')));
+      return;
+    }
+    try {
+      await StudyStorage.renameSession(widget.sessionId!, name);
+      setState(() => _sessionName = name);
+      SemanticsService.announce('Renamed to $name', TextDirection.ltr);
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rename failed')));
+    }
+  }
+
+  Future<void> _deleteCurrentPack() async {
+    if (widget.sessionId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete pack?'),
+        content: const Text("This will remove it from your device. You can’t undo this."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await StudyStorage.deleteSession(widget.sessionId!);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Delete failed')));
+      }
+    }
   }
 }
 
@@ -771,10 +1116,106 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class StudyScreen extends StatelessWidget {
+class StudyScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cards;
   final String? title;
-  const StudyScreen({super.key, required this.cards, this.title});
+  final String? sessionId;
+  const StudyScreen({super.key, required this.cards, this.title, this.sessionId});
+
+  @override
+  State<StudyScreen> createState() => _StudyScreenState();
+}
+
+class _StudyScreenState extends State<StudyScreen> {
+  late String _title;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = widget.title ?? 'Study';
+  }
+
+  Future<void> _promptRename() async {
+    final controller = TextEditingController(text: _title);
+    String? error;
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename pack'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLength: 60,
+                decoration: InputDecoration(
+                  hintText: 'Enter name',
+                  errorText: error,
+                ),
+                onSubmitted: (_) => Navigator.of(context).pop('save'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop('cancel'), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.of(context).pop('save'), child: const Text('Save')),
+          ],
+        );
+      },
+    );
+
+    if (result != 'save') return;
+    final name = controller.text.trim();
+    if (name.isEmpty || name.length > 60 || name.startsWith('.') || name.endsWith('.') || name.startsWith('/') || name.endsWith('/') || name.startsWith('\\') || name.endsWith('\\')) {
+      // Re-open with inline error
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Rename pack'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: TextEditingController(text: controller.text),
+                autofocus: true,
+                maxLength: 60,
+                decoration: const InputDecoration(
+                  hintText: 'Enter name',
+                  errorText: 'Name can’t be empty',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final old = _title;
+    setState(() => _title = name);
+    try {
+      final id = widget.sessionId;
+      if (id != null && id.isNotEmpty) {
+        await StudyStorage.renameSession(id, name);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Renamed to "$name"')));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _title = old);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rename failed')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -785,15 +1226,22 @@ class StudyScreen extends StatelessWidget {
           tooltip: 'Back',
         ),
         title: Tooltip(
-          message: title ?? 'Study',
+          message: _title,
           preferBelow: false,
-          child: Text(title ?? 'Study', maxLines: 1, overflow: TextOverflow.ellipsis),
+          child: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Rename',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: _promptRename,
+          ),
+        ],
       ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: FlashcardSwiper(cards: cards, labels: const ['Good', 'Maybe', 'Bad']),
+          child: FlashcardSwiper(cards: widget.cards, labels: const ['Good', 'Maybe', 'Bad']),
         ),
       ),
     );
@@ -833,6 +1281,12 @@ class StudySession {
       return null;
     }
   }
+}
+
+class _OutlineSection {
+  final String title;
+  final String body;
+  _OutlineSection(this.title, this.body);
 }
 
 class StudyStorage {
@@ -932,7 +1386,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _load() async {
-    final list = await StudyStorage.loadAll();
+  // Run idempotent migration (titles, etc.) without altering UI data shape
+  try { await StudyPackRepository().listPacks(); } catch (_) {}
+  final list = await StudyStorage.loadAll();
     if (!mounted) return;
     setState(() {
       _items = list;

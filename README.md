@@ -1,16 +1,45 @@
-# neuroforge_app
+# Spaced — Frontend
 
-A new Flutter project.
+Flutter app for generating and studying “Study Packs”. Supports Android, iOS, desktop, and Web (MVP).
 
-## Getting Started
+## Config and environments
 
-This project is a starting point for a Flutter application.
+API base URL is centralized in `lib/config.dart` and can be overridden via a `--dart-define` flag:
 
-A few resources to get you started if this is your first Flutter project:
+- Dev (Chrome):
+	- `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8000`
+- Dev (Android emulator):
+	- `flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:8000`
+- Release (Web):
+	- `flutter build web --release --dart-define=API_BASE_URL=https://api.example.com`
+- Release (Android):
+	- `flutter build apk --release --dart-define=API_BASE_URL=https://api.example.com`
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+If not provided, the app defaults to `http://localhost:8000` on Web and `http://10.0.2.2:8000` on mobile/desktop.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+See also `README_web.md` for deployment tips and CORS configuration (FastAPI).
+
+## Previous Packs (storage)
+
+- Stored in `shared_preferences`, which maps to `localStorage` on Web.
+- Each pack stores: id, name, createdAt, flashcards, outline; the index is tracked under the key `sessions_index_v1`.
+- Rename/Delete: Optimistic updates in UI; persisted immediately via `StudyStorage`.
+- Migration: A safe, idempotent migration ensures older sessions get a default title (e.g., “Study Pack — YYYY-MM-DD hh:mm”). This runs at library load.
+
+## Run locally
+
+1. Enable web once (optional): `flutter config --enable-web`
+2. Run in Chrome with dev API:
+	 - `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8000`
+3. Or on Android emulator with host API:
+	 - `flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:8000`
+
+## Build
+
+- Web: `flutter build web --release --dart-define=API_BASE_URL=https://api.example.com`
+- Android: `flutter build apk --release --dart-define=API_BASE_URL=https://api.example.com`
+
+## Notes
+
+- File picker is web-safe via conditional imports; files >10 MB are blocked with a friendly message.
+- Upload shows progress with rotating status; after upload, the app polls until your preview data is ready.
