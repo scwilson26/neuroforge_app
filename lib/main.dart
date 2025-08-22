@@ -1128,6 +1128,7 @@ class StudyScreen extends StatefulWidget {
 
 class _StudyScreenState extends State<StudyScreen> {
   late String _title;
+  StudyMode _mode = StudyMode.cram;
 
   @override
   void initState() {
@@ -1241,7 +1242,48 @@ class _StudyScreenState extends State<StudyScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: FlashcardSwiper(cards: widget.cards, labels: const ['Good', 'Maybe', 'Bad']),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Mode toggle
+              Align(
+                alignment: Alignment.center,
+                child: SegmentedButton<StudyMode>(
+                  segments: const [
+                    ButtonSegment(value: StudyMode.cram, label: Text('Cram')), 
+                    ButtonSegment(value: StudyMode.longTerm, label: Text('Long-term')),
+                  ],
+                  selected: {_mode},
+                  onSelectionChanged: (s) => setState(() => _mode = s.first),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: FlashcardSwiper(
+                  key: ValueKey('swiper_${_mode.name}'),
+                  cards: widget.cards,
+                  labels: const ['Good', 'Maybe', 'Bad', 'Perfect'],
+                  sessionId: widget.sessionId,
+                  mode: _mode,
+                  onComplete: (ratings, schedule, mode) {
+                    if (!mounted) return;
+                    Navigator.of(context).pushReplacement(
+                      _fadeSlide(
+                        SessionSummaryScreen(
+                          title: _title,
+                          mode: mode,
+                          ratings: ratings,
+                          schedule: schedule,
+                          totalCards: widget.cards.length,
+                        ),
+                        context,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1291,6 +1333,9 @@ class _OutlineSection {
 
 class StudyStorage {
   static const String _indexKey = 'sessions_index_v1';
+  static String _ratingsKey(String id, StudyMode mode) => 'ratings_${id}_${mode == StudyMode.cram ? 'cram' : 'long'}';
+  static String _legacyRatingsKey(String id) => 'ratings_$id';
+  static String _scheduleKey(String id) => 'schedule_$id';
 
   static Future<List<String>> _getIndex(SharedPreferences prefs) async {
     final list = prefs.getStringList(_indexKey) ?? <String>[];
@@ -1355,6 +1400,91 @@ class StudyStorage {
       map['name'] = newName;
       await prefs.setString('session_$id', jsonEncode(map));
     } catch (_) {}
+  }
+
+  // --- Ratings persistence (per session) ---
+  static String _k2s(Knowledge k) {
+    switch (k) {
+      case Knowledge.know:
+        return 'k';
+      case Knowledge.maybe:
+        return 'm';
+      case Knowledge.dunno:
+        return 'd';
+      case Knowledge.perfect:
+        return 'p';
+    }
+  }
+
+  static Knowledge? _s2k(String? s) {
+    switch (s) {
+      case 'k':
+      case 'know':
+        return Knowledge.know;
+      case 'm':
+      case 'maybe':
+        return Knowledge.maybe;
+      case 'd':
+      case 'dunno':
+        return Knowledge.dunno;
+      case 'p':
+      case 'perfect':
+        return Knowledge.perfect;
+    }
+    return null;
+  }
+
+  static Future<Map<int, Knowledge>> loadRatings(String id, StudyMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    // Prefer per-mode key; fall back to legacy key if missing
+    String? raw = prefs.getString(_ratingsKey(id, mode));
+    raw ??= prefs.getString(_legacyRatingsKey(id));
+    if (raw == null || raw.isEmpty) return <int, Knowledge>{};
+    try {
+      final map = (jsonDecode(raw) as Map<String, dynamic>);
+      final out = <int, Knowledge>{};
+      map.forEach((k, v) {
+        final idx = int.tryParse(k);
+        final kv = _s2k(v?.toString());
+        if (idx != null && kv != null) out[idx] = kv;
+      });
+      return out;
+    } catch (_) {
+      return <int, Knowledge>{};
+    }
+  }
+
+  static Future<void> saveRatings(String id, Map<int, Knowledge> ratings, StudyMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = <String, String>{};
+    ratings.forEach((k, v) => map['$k'] = _k2s(v));
+    await prefs.setString(_ratingsKey(id, mode), jsonEncode(map));
+  }
+
+  // --- Long-term scheduling ---
+  static Future<Map<int, DateTime>> loadSchedule(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_scheduleKey(id));
+    if (raw == null || raw.isEmpty) return <int, DateTime>{};
+    try {
+      final map = (jsonDecode(raw) as Map<String, dynamic>);
+      final out = <int, DateTime>{};
+      map.forEach((k, v) {
+        final idx = int.tryParse(k);
+        final when = DateTime.tryParse((v ?? '').toString());
+        if (idx != null && when != null) out[idx] = when;
+      });
+      return out;
+    } catch (_) {
+      return <int, DateTime>{};
+    }
+  }
+
+  static Future<void> saveSchedule(String id, Map<int, DateTime> schedule) async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = <String, String>{};
+    schedule.forEach((k, v) => map['$k'] = v.toIso8601String());
+    await prefs.setString(_scheduleKey(id), jsonEncode(map));
   }
 }
 
@@ -1847,7 +1977,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
 class FlashcardSwiper extends StatefulWidget {
   final List<Map<String, dynamic>> cards;
   final List<String> labels;
-  const FlashcardSwiper({super.key, required this.cards, this.labels = const ['I know it!', 'Maybe know it...', 'I dunno']});
+  final String? sessionId;
+  final StudyMode mode;
+  final void Function(Map<int, Knowledge> ratings, Map<int, DateTime> schedule, StudyMode mode)? onComplete;
+  const FlashcardSwiper({super.key, required this.cards, this.labels = const ['Good', 'Maybe', 'Bad', 'Perfect'], this.sessionId, this.mode = StudyMode.cram, this.onComplete});
 
   @override
   State<FlashcardSwiper> createState() => _FlashcardSwiperState();
@@ -1858,6 +1991,8 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
   int _index = 0;
   bool _showBack = false;
   final Map<int, Knowledge> _ratings = {};
+  final Map<int, DateTime> _schedule = {}; // long-term only
+  final Set<int> _hiddenCram = <int>{}; // cram session only (in-memory)
 
   int get _knownCount => _ratings.values.where((r) => r == Knowledge.know).length;
   int get _maybeCount => _ratings.values.where((r) => r == Knowledge.maybe).length;
@@ -1867,15 +2002,106 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
     setState(() {
       _ratings[_index] = k;
     });
-    if (_index < widget.cards.length - 1) {
-      _controller.nextPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    final id = widget.sessionId;
+    if (id != null && id.isNotEmpty) {
+      // Fire and forget persistence
+  StudyStorage.saveRatings(id, Map<int, Knowledge>.from(_ratings), widget.mode);
     }
+
+    // Scheduling by mode
+    if (widget.mode == StudyMode.cram) {
+      // In cram, only Perfect hides for today
+      if (k == Knowledge.perfect) {
+        _hiddenCram.add(_index);
+      }
+    } else {
+      // Long-term schedule intervals:
+      // Good → 3 days; Maybe → 1 day; Bad → today (keep visible); Perfect → 10 days
+      final now = DateTime.now();
+      switch (k) {
+        case Knowledge.know:
+          _schedule[_index] = now.add(const Duration(days: 3));
+          break;
+        case Knowledge.maybe:
+          _schedule[_index] = now.add(const Duration(days: 1));
+          break;
+        case Knowledge.dunno:
+          _schedule.remove(_index); // due now; keep visible this session
+          break;
+        case Knowledge.perfect:
+          _schedule[_index] = now.add(const Duration(days: 10));
+          break;
+      }
+      if (id != null && id.isNotEmpty) {
+        StudyStorage.saveSchedule(id, Map<int, DateTime>.from(_schedule));
+      }
+    }
+    // If we're on the last card in the deck, offer next-step options
+    final isLastCard = _index >= widget.cards.length - 1;
+    if (isLastCard) {
+      Future.microtask(() async {
+        if (!mounted) return;
+        final choice = await showDialog<String>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Finished deck'),
+            content: const Text('What would you like to do next?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop('start'),
+                child: const Text('Start over'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop('summary'),
+                child: const Text('Go to summary'),
+              ),
+            ],
+          ),
+        );
+        if (!mounted) return;
+        if (choice == 'summary') {
+          if (widget.onComplete != null) {
+            final ratingsCopy = Map<int, Knowledge>.from(_ratings);
+            final scheduleCopy = Map<int, DateTime>.from(_schedule);
+            widget.onComplete!(ratingsCopy, scheduleCopy, widget.mode);
+          } else if (widget.mode == StudyMode.cram) {
+            final messenger = ScaffoldMessenger.of(context);
+            messenger.clearSnackBars();
+            messenger.showSnackBar(const SnackBar(content: Text('Cram complete for today')));
+            Navigator.of(context).maybePop();
+          }
+        } else if (choice == 'start') {
+          _goFirstVisible();
+        }
+      });
+      return;
+    }
+
+    // Otherwise, move to next visible card (wraps or ends cram if none)
+    _goNextVisible();
   }
 
   @override
   void initState() {
     super.initState();
     _controller = PageController(viewportFraction: 0.92);
+    // Load prior ratings for this session, if any
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final id = widget.sessionId;
+      if (id != null && id.isNotEmpty) {
+  final saved = await StudyStorage.loadRatings(id, widget.mode);
+        if (!mounted || saved.isEmpty) return;
+        setState(() => _ratings.addAll(saved));
+      }
+      // Load schedule for long-term
+      final id2 = widget.sessionId;
+      if (id2 != null && id2.isNotEmpty) {
+        final sched = await StudyStorage.loadSchedule(id2);
+        if (mounted && sched.isNotEmpty) {
+          setState(() => _schedule.addAll(sched));
+        }
+      }
+    });
   }
 
   @override
@@ -1885,6 +2111,103 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
   }
 
   void _toggleFlip() => setState(() => _showBack = !_showBack);
+
+  bool _isVisibleIndex(int i) {
+    if (widget.mode == StudyMode.cram) {
+      return !_hiddenCram.contains(i);
+    }
+    // Long-term: only due cards shown
+  final due = _schedule[i];
+  final now = DateTime.now();
+  return due == null || !due.isAfter(now); // visible if due <= now
+  }
+
+  void _goNextVisible() {
+    int i = _index;
+    while (i < widget.cards.length - 1) {
+      i++;
+      if (_isVisibleIndex(i)) {
+          _controller.animateToPage(i, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+          return;
+        }
+    }
+    // Wrap to first visible from start
+    for (int j = 0; j < widget.cards.length; j++) {
+      if (_isVisibleIndex(j)) {
+        if (j != _index) {
+          _controller.animateToPage(j, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+          return;
+        }
+        break;
+      }
+      }
+    // None ahead: try backwards
+    i = _index;
+    while (i > 0) {
+      i--;
+      if (_isVisibleIndex(i)) {
+        _controller.animateToPage(i, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        return;
+      }
+    }
+    // No visible cards left -> finish session (both modes)
+    if (widget.onComplete != null) {
+      final ratingsCopy = Map<int, Knowledge>.from(_ratings);
+      final scheduleCopy = Map<int, DateTime>.from(_schedule);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onComplete!(ratingsCopy, scheduleCopy, widget.mode);
+      });
+      return;
+    }
+    // Fallback: previous behavior for cram
+    if (widget.mode == StudyMode.cram) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      messenger.showSnackBar(const SnackBar(content: Text('Cram complete for today')));
+      Future.microtask(() {
+        if (mounted) Navigator.of(context).maybePop();
+      });
+    }
+  }
+
+  void _goPrevVisible() {
+    int i = _index;
+    while (i > 0) {
+      i--;
+      if (_isVisibleIndex(i)) {
+        _controller.animateToPage(i, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        return;
+      }
+    }
+    // If none behind, try forward
+    _goNextVisible();
+  }
+
+  void _goFirstVisible() {
+    for (int j = 0; j < widget.cards.length; j++) {
+      if (_isVisibleIndex(j)) {
+        _controller.animateToPage(j, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        return;
+      }
+    }
+    // No visible cards left -> complete
+    if (widget.onComplete != null) {
+      final ratingsCopy = Map<int, Knowledge>.from(_ratings);
+      final scheduleCopy = Map<int, DateTime>.from(_schedule);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onComplete!(ratingsCopy, scheduleCopy, widget.mode);
+      });
+      return;
+    }
+    if (widget.mode == StudyMode.cram) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      messenger.showSnackBar(const SnackBar(content: Text('Cram complete for today')));
+      Future.microtask(() {
+        if (mounted) Navigator.of(context).maybePop();
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1915,12 +2238,17 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
                 _index = i;
                 _showBack = false;
               });
+              // Auto-skip hidden / not-due
+              if (!_isVisibleIndex(i)) {
+                _goNextVisible();
+              }
             },
             itemCount: widget.cards.length,
             itemBuilder: (context, i) {
               final c = widget.cards[i];
               final front = (c['front'] ?? '').toString();
               final back = (c['back'] ?? '').toString();
+              final r = _ratings[i];
 
               return GestureDetector(
                 onTap: _toggleFlip,
@@ -1993,6 +2321,59 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      if (r != null)
+                        Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: () {
+                                final cs = Theme.of(context).colorScheme;
+                                switch (r) {
+                                  case Knowledge.know:
+                                    return cs.primaryContainer;
+                                  case Knowledge.maybe:
+                                    return cs.secondaryContainer;
+                                  case Knowledge.dunno:
+                                    return cs.errorContainer;
+                                  case Knowledge.perfect:
+                                    return cs.tertiaryContainer;
+                                }
+                              }(),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              () {
+                                switch (r) {
+                                  case Knowledge.know:
+                                    return widget.labels.isNotEmpty ? widget.labels[0] : 'Good';
+                                  case Knowledge.maybe:
+                                    return widget.labels.length > 1 ? widget.labels[1] : 'Maybe';
+                                  case Knowledge.dunno:
+                                    return widget.labels.length > 2 ? widget.labels[2] : 'Bad';
+                                  case Knowledge.perfect:
+                                    return widget.labels.length > 3 ? widget.labels[3] : 'Perfect';
+                                }
+                              }(),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: () {
+                                  final cs = Theme.of(context).colorScheme;
+                                  switch (r) {
+                                    case Knowledge.know:
+                                      return cs.onPrimaryContainer;
+                                    case Knowledge.maybe:
+                                      return cs.onSecondaryContainer;
+                                    case Knowledge.dunno:
+                                      return cs.onErrorContainer;
+                                    case Knowledge.perfect:
+                                      return cs.onTertiaryContainer;
+                                  }
+                                }(),
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -2006,17 +2387,13 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
           children: [
             IconButton(
               tooltip: 'Previous',
-              onPressed: _index > 0
-                  ? () => _controller.previousPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
-                  : null,
+              onPressed: () => _goPrevVisible(),
               icon: const Icon(Icons.chevron_left),
             ),
             const SizedBox(width: 8),
             IconButton(
               tooltip: 'Next',
-              onPressed: _index < widget.cards.length - 1
-                  ? () => _controller.nextPage(duration: const Duration(milliseconds: 220), curve: Curves.easeOut)
-                  : null,
+              onPressed: () => _goNextVisible(),
               icon: const Icon(Icons.chevron_right),
             ),
           ],
@@ -2053,6 +2430,14 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
                 label: Text(widget.labels[2]),
               ),
             ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => _rate(Knowledge.perfect),
+                icon: const Icon(Icons.star_outline),
+                label: Text(widget.labels.length > 3 ? widget.labels[3] : 'Perfect'),
+              ),
+            ),
           ],
         ),
       ],
@@ -2060,4 +2445,134 @@ class _FlashcardSwiperState extends State<FlashcardSwiper> {
   }
 }
 
-enum Knowledge { know, maybe, dunno }
+enum Knowledge { know, maybe, dunno, perfect }
+enum StudyMode { cram, longTerm }
+extension StudyModeX on StudyMode {
+  String get label => this == StudyMode.cram ? 'Cram' : 'Long-term';
+}
+
+class SessionSummaryScreen extends StatelessWidget {
+  final String title;
+  final StudyMode mode;
+  final Map<int, Knowledge> ratings;
+  final Map<int, DateTime> schedule;
+  final int totalCards;
+  const SessionSummaryScreen({super.key, required this.title, required this.mode, required this.ratings, required this.schedule, required this.totalCards});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    int good = 0, maybe = 0, bad = 0, perfect = 0;
+    ratings.values.forEach((k) {
+      switch (k) {
+        case Knowledge.know:
+          good++;
+          break;
+        case Knowledge.maybe:
+          maybe++;
+          break;
+        case Knowledge.dunno:
+          bad++;
+          break;
+        case Knowledge.perfect:
+          perfect++;
+          break;
+      }
+    });
+    List<MapEntry<int, DateTime>> upcoming = [];
+    if (mode == StudyMode.longTerm) {
+      upcoming = schedule.entries.where((e) => e.value.isAfter(DateTime.now())).toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+    }
+    String fmt(DateTime dt) {
+      final d = dt.toLocal();
+      String two(int n) => n.toString().padLeft(2, '0');
+      return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Session summary'),
+        leading: IconButton(
+          icon: const Icon(Icons.check),
+          tooltip: 'Done',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(title, style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 8),
+              Text('Mode: ${mode.label}', style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodySmall?.color?.withOpacity(0.8))),
+              const SizedBox(height: 16),
+              Card(
+                elevation: 0,
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Results', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      Text('Good: $good · Maybe: $maybe · Bad: $bad · Perfect: $perfect', style: theme.textTheme.bodyMedium),
+                      Text('Total cards: $totalCards', style: theme.textTheme.bodySmall?.copyWith(color: theme.textTheme.bodySmall?.color?.withOpacity(0.8))),
+                    ],
+                  ),
+                ),
+              ),
+              if (mode == StudyMode.longTerm) ...[
+                const SizedBox(height: 12),
+                Card(
+                  elevation: 0,
+                  clipBehavior: Clip.antiAlias,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Next reviews', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        if (upcoming.isEmpty)
+                          Text('Nothing scheduled yet', style: theme.textTheme.bodySmall)
+                        else
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 220),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: upcoming.length,
+                              separatorBuilder: (_, __) => const Divider(height: 1),
+                              itemBuilder: (context, i) {
+                                final e = upcoming[i];
+                                return ListTile(
+                                  dense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                                  visualDensity: VisualDensity.compact,
+                                  leading: const Icon(Icons.schedule),
+                                  title: Text('Card #${e.key + 1}'),
+                                  subtitle: Text('Due ${fmt(e.value)}'),
+                                );
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
