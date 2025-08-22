@@ -43,3 +43,13 @@ See also `README_web.md` for deployment tips and CORS configuration (FastAPI).
 
 - File picker is web-safe via conditional imports; files >10 MB are blocked with a friendly message.
 - Upload shows progress with rotating status; after upload, the app polls until your preview data is ready.
+
+## Deploying on Render (Frontend)
+
+Build the web app pointing to your Render API URL:
+
+```
+flutter build web --release --dart-define=API_BASE_URL=https://YOUR-API.onrender.com
+```
+
+Host the `build/web` directory as a Render Static Site (or any static host). Ensure your backend `ALLOWED_ORIGINS` includes your front-end origin.
